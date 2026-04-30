@@ -1,0 +1,62 @@
+id: ssrf_path
+name: SSRF / Path Traversal
+enabled: true
+severity_weight: High
+
+# 共通: 「外部入力で URL/path を組み立てて I/O する」アンチパターン
+code_safe_patterns:
+  - "ALLOW(ED|LIST)|allow(_|)list"          # 明示的 allowlist
+  - "urllib\\.parse\\.urlparse"             # url 解析→検証経路 (Python)
+  - "new URL\\("                            # url 解析→検証経路 (JS)
+  - "Path\\(.*\\)\\.resolve\\(\\)"          # 正規化 (Python)
+  - "is_relative_to\\("                     # Python 3.9+ パス制約
+  - "secure_filename\\("                    # werkzeug の安全化
+  - "BASE_DIR.*\\/"                         # ベースディレクトリ制約
+  - "path\\.resolve\\("                     # 正規化 (Node)
+
+prompt:
+  detect_patterns: |
+    1. SSRF (Server-Side Request Forgery)
+       - requests.get(user_input) / httpx.get(user_input) / urllib.request.urlopen(user_input)
+       - fetch(user_input) / axios.get(user_input) を server 側で実行
+       - ユーザー入力をそのまま外部 URL として使い、scheme / host の allowlist が無い
+       - file://, gopher://, http://169.254.169.254 (cloud metadata), http://127.0.0.1, http://[::1] 等の特殊スキーム/IP を弾けない
+       - リダイレクトを follow して内部 IP に到達できる経路
+       - DNS rebinding 対策 (resolve 後に再検証) が無い
+    2. Path Traversal
+       - open(user_input) / pathlib.Path(user_input).read_text() / fs.readFile(user_input)
+       - os.path.join(BASE, user_input) / path.join(BASE, user_input) で .. を吸収できていない
+       - tempfile / static file 配信でユーザー入力を直接ファイル名に
+       - アップロード経路でファイル名 (multipart の filename) を信用してパスに使う
+    3. 関連: ZIP slip
+       - zipfile.extractall() / tar.extractall() / unzipper / adm-zip 後にパスを検証していない（archive 内の ../ を許す）
+    4. SSRF + Path 統合
+       - file:// scheme で local fs を読む
+       - server 側の templating / include で URL を解決して読む
+
+  safe_patterns: |
+    以下は検出しない:
+    - 明示的 allowlist（host / scheme / 拡張子）でフィルタ済み
+    - urllib.parse / new URL 等で scheme / host を検証して reject している
+    - Path(...).resolve() + is_relative_to(BASE_DIR) で範囲制約 (Python)
+    - path.resolve() + startsWith(BASE_DIR) で範囲制約 (Node)
+    - werkzeug.secure_filename / 同等のサニタイザを通している
+    - URL 型 (Pydantic HttpUrl / class-validator IsUrl 等) で検証されている
+    - ORM / NoSQL クライアント等の DB 抽象経由で fs / 外部 IO ではないもの
+
+  output_schema: |
+    以下のJSON形式で出力してください。findings が空なら問題なしです。
+    JSONのみを出力し、コードフェンス（```）や説明文を付けないでください。
+    {
+      "findings": [
+        {
+          "file": "ファイルパス（diffヘッダーから取得）",
+          "line": "行番号または該当箇所の説明",
+          "severity": "Critical|High|Medium|Low",
+          "title": "問題の簡潔なタイトル",
+          "detail": "何が問題で、どう攻撃されうるか",
+          "fix": "具体的な修正案"
+        }
+      ],
+      "summary": "この観点での全体的な評価（1-2文）"
+    }

@@ -1,0 +1,63 @@
+id: auth
+name: 認証・認可 (Authn / Authz / IDOR)
+enabled: true
+severity_weight: Critical
+
+# 複数言語・複数 framework で共通して使われる認証/認可マーカーのみを汎用版に置く。
+# プロジェクト固有の安全装置 (specific dependency 関数, dev-only bypass のガード等) は
+# overrides_path で auth.yml を上書きまたはマージして追加すること。
+code_safe_patterns:
+  - "@login_required"                       # Django / Flask 慣用
+  - "@authenticated"                        # 各種 FW
+  - "@authorize"                            # ASP.NET / Spring 等
+  - "isAuthenticated"                       # JS / TS 慣用
+  - "before_action\\s*:authenticate"        # Rails before_action :authenticate_user!
+  - "ensure_authenticated"                  # 一般的な命名
+  - "permission_required"                   # Django Guardian 等
+  - "requireAuth\\(|require_auth\\("        # 一般的な命名
+  - "hasRole\\(|has_role\\("                # role guard 一般
+
+prompt:
+  detect_patterns: |
+    1. 認証バイパス
+       - 認証必須エンドポイントから guard / middleware / decorator が抜けている
+       - middleware 層の検証ロジックを迂回する条件分岐
+       - 環境変数フラグ 1 つで認証を無効化できる経路（fail-open になっていないか）
+       - JWT / session の検証を呼び出していない
+    2. 認可不備 / IDOR (Insecure Direct Object Reference)
+       - リソース所有チェックなしに `resource_id` をクエリ/path から受け取って読み書き
+       - 他ユーザーの ID を渡せば他人のデータが読める / 書ける
+       - admin 専用 API で role チェックが無い
+    3. JWT / トークン検証の欠落 / 過信
+       - JWT の payload だけ見て signature を検証していない
+       - 期限切れトークンを通している
+       - email_verified / aud / iss を見ていない
+       - secret/JWK のローテーションに対応していない
+    4. role 昇格
+       - 自分自身を admin に昇格できる経路（user 自身が role を書き換えられる）
+       - 最後の admin を削除できる / 自分自身を降格できてシステムが詰む
+
+  safe_patterns: |
+    以下は検出しない（誤検知を避ける）:
+    - guard / decorator / middleware (login_required, authenticated, authorize, before_action :authenticate_user! 等) で保護済みのエンドポイント
+    - 信頼できる JWT/IDトークン検証ライブラリ (PyJWT / jose / jsonwebtoken 等) を経由した検証
+    - 所有チェック (resource.user_id == current_user.id 等) が明示されている
+    - admin 専用 API で role / permission ガードが入っている
+    - admin の自己保護 (自分自身の削除拒否, 最後の admin 降格拒否) が実装されている
+
+  output_schema: |
+    以下のJSON形式で出力してください。findings が空なら問題なしです。
+    JSONのみを出力し、コードフェンス（```）や説明文を付けないでください。
+    {
+      "findings": [
+        {
+          "file": "ファイルパス（diffヘッダーから取得）",
+          "line": "行番号または該当箇所の説明",
+          "severity": "Critical|High|Medium|Low",
+          "title": "問題の簡潔なタイトル",
+          "detail": "何が問題で、どう攻撃されうるか",
+          "fix": "具体的な修正案"
+        }
+      ],
+      "summary": "この観点での全体的な評価（1-2文）"
+    }

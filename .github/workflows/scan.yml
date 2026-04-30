@@ -1,0 +1,227 @@
+name: LLM Security Scan
+
+on:
+  workflow_call:
+    inputs:
+      overrides_path:
+        description: "プロジェクト固有の perspectives / triage_prompts を置いたディレクトリ (caller リポ内)"
+        type: string
+        default: ""
+      perspectives_disabled:
+        description: "無効化する perspective id (comma 区切り。例: 'secrets,xss')"
+        type: string
+        default: ""
+      scan_targets:
+        description: "diff 対象のファイルパターン (空白区切り)"
+        type: string
+        default: "*.py *.ts *.tsx *.js *.jsx"
+      max_low_per_perspective:
+        description: "Low severity の triage 上限 (rest は status=raw)"
+        type: number
+        default: 3
+      triage_enabled:
+        description: "弁証法的トリアージを有効にするか"
+        type: boolean
+        default: true
+      debate_rounds:
+        description: "Multi-round debate のラウンド数 (Step 4 用に予約; 現状未使用)"
+        type: number
+        default: 1
+    secrets:
+      OPENAI_API_KEY:
+        required: false
+      GCP_SA_KEY:
+        required: false
+      GEMINI_API_KEY:
+        required: false
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    permissions:
+      contents:       read
+      pull-requests:  write
+      id-token:       write
+    steps:
+      # 1) caller のリポジトリ
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # 2) このツール自身を同じ ref で .llm-security-scan/ にチェックアウト
+      - name: Resolve workflow ref
+        id: tool_ref
+        run: |
+          REF="${{ github.workflow_ref }}"
+          # github.workflow_ref = "owner/repo/.github/workflows/scan.yml@<ref>"
+          echo "ref=${REF##*@}" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v4
+        with:
+          repository: Zuck3-r/llm-security-scan
+          ref:        ${{ steps.tool_ref.outputs.ref }}
+          path:       .llm-security-scan
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      # 3) diff 計算
+      - name: Compute diff
+        id: diff
+        env:
+          BASE_REF:      ${{ github.base_ref }}
+          SCAN_TARGETS:  ${{ inputs.scan_targets }}
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/scan
+          DIFF_FILE=/tmp/scan/diff.patch
+          # SCAN_TARGETS を空白区切り → git pathspec 配列へ
+          PATHSPEC=()
+          for pat in $SCAN_TARGETS; do PATHSPEC+=("$pat"); done
+          # 除外: 依存・ビルド成果物・テスト・Storybook
+          git diff "origin/${BASE_REF}...HEAD" -- "${PATHSPEC[@]}" \
+            ':(exclude)**/*.d.ts' \
+            ':(exclude)package-lock.json' \
+            ':(exclude)**/package-lock.json' \
+            ':(exclude)**/node_modules/**' \
+            ':(exclude)**/dist/**' \
+            ':(exclude)**/build/**' \
+            ':(exclude)**/.next/**' \
+            ':(exclude)**/coverage/**' \
+            ':(exclude)**/__pycache__/**' \
+            ':(exclude)**/tests/**' \
+            ':(exclude)**/__tests__/**' \
+            ':(exclude)**/test_*.py' \
+            ':(exclude)**/*_test.py' \
+            ':(exclude)**/*.test.ts' \
+            ':(exclude)**/*.test.tsx' \
+            ':(exclude)**/*.test.js' \
+            ':(exclude)**/*.test.jsx' \
+            ':(exclude)**/*.spec.ts' \
+            ':(exclude)**/*.spec.tsx' \
+            ':(exclude)**/*.spec.js' \
+            ':(exclude)**/*.spec.jsx' \
+            ':(exclude)**/*.stories.ts' \
+            ':(exclude)**/*.stories.tsx' \
+            ':(exclude)**/conftest.py' \
+            > "$DIFF_FILE" || true
+          if [ ! -s "$DIFF_FILE" ]; then
+            echo "skip_scan=true" >> "$GITHUB_OUTPUT"
+            echo "No relevant diff."
+          else
+            echo "skip_scan=false" >> "$GITHUB_OUTPUT"
+            wc -c "$DIFF_FILE"
+          fi
+
+      # 4) overrides マージ
+      #    base    = .llm-security-scan/perspectives + triage_prompts.yml
+      #    overlay = caller の ${{ inputs.overrides_path }}/perspectives, /triage_prompts.yml
+      #    perspectives_disabled の id は enabled: false に書き換え
+      - name: Merge overrides
+        if: steps.diff.outputs.skip_scan != 'true'
+        env:
+          OVERRIDES: ${{ inputs.overrides_path }}
+          DISABLED:  ${{ inputs.perspectives_disabled }}
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/scan/perspectives
+          cp .llm-security-scan/perspectives/*.yml /tmp/scan/perspectives/
+          cp .llm-security-scan/triage_prompts.yml /tmp/scan/triage_prompts.yml
+          if [ -n "$OVERRIDES" ] && [ -d "$OVERRIDES/perspectives" ]; then
+            cp "$OVERRIDES"/perspectives/*.yml /tmp/scan/perspectives/ 2>/dev/null || true
+          fi
+          if [ -n "$OVERRIDES" ] && [ -f "$OVERRIDES/triage_prompts.yml" ]; then
+            cp "$OVERRIDES/triage_prompts.yml" /tmp/scan/triage_prompts.yml
+          fi
+          # perspectives_disabled (CSV) を enabled:false に書き換え
+          if [ -n "$DISABLED" ]; then
+            IFS=',' read -ra IDS <<< "$DISABLED"
+            for id in "${IDS[@]}"; do
+              id="$(echo "$id" | xargs)"
+              [ -z "$id" ] && continue
+              f="/tmp/scan/perspectives/${id}.yml"
+              [ -f "$f" ] && sed -i 's/^enabled:.*$/enabled: false/' "$f"
+            done
+          fi
+          # triage.py は src/ の親 (= .llm-security-scan/) を探しに行くので
+          # マージ後の triage_prompts.yml をそこへ反映する
+          cp /tmp/scan/triage_prompts.yml .llm-security-scan/triage_prompts.yml
+
+      # 5) provider 検出 (OpenAI > Vertex > Gemini)
+      - name: Detect provider
+        id: detect
+        if: steps.diff.outputs.skip_scan != 'true'
+        env:
+          HAS_OPENAI:  ${{ secrets.OPENAI_API_KEY != '' }}
+          HAS_GCP_SA:  ${{ secrets.GCP_SA_KEY     != '' }}
+          HAS_GEMINI:  ${{ secrets.GEMINI_API_KEY != '' }}
+        run: |
+          if   [ "$HAS_OPENAI" = "true" ]; then echo "provider=openai" >> "$GITHUB_OUTPUT"
+          elif [ "$HAS_GCP_SA" = "true" ]; then echo "provider=vertex" >> "$GITHUB_OUTPUT"
+          elif [ "$HAS_GEMINI" = "true" ]; then echo "provider=gemini" >> "$GITHUB_OUTPUT"
+          else
+            echo "provider=none" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Authenticate to GCP (Vertex AI)
+        if: steps.detect.outputs.provider == 'vertex'
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Install dependencies
+        if: steps.diff.outputs.skip_scan != 'true' && steps.detect.outputs.provider != 'none'
+        run: |
+          pip install --quiet \
+            'openai>=1.50' \
+            'google-cloud-aiplatform>=1.71' \
+            'google-generativeai>=0.8' \
+            pyyaml
+
+      # 6) スキャン実行
+      - name: Run scan
+        if: steps.diff.outputs.skip_scan != 'true' && steps.detect.outputs.provider != 'none'
+        env:
+          LLM_PROVIDER:          ${{ steps.detect.outputs.provider }}
+          OPENAI_API_KEY:        ${{ secrets.OPENAI_API_KEY }}
+          GOOGLE_CLOUD_PROJECT:  ${{ vars.GCP_PROJECT  || 'CHANGE_ME' }}
+          GOOGLE_CLOUD_LOCATION: ${{ vars.GCP_LOCATION || 'us-central1' }}
+          GEMINI_API_KEY:        ${{ secrets.GEMINI_API_KEY }}
+          LLM_MODEL:             ${{ vars.LLM_MODEL || 'gpt-4o-mini' }}
+          TRIAGE_ENABLED:        ${{ inputs.triage_enabled }}
+          MAX_LOW:               ${{ inputs.max_low_per_perspective }}
+        run: |
+          ARGS=()
+          if [ "$TRIAGE_ENABLED" != "true" ]; then ARGS+=(--no-triage); fi
+          python3 .llm-security-scan/src/engine.py \
+            --diff /tmp/scan/diff.patch \
+            --output /tmp/scan/report.md \
+            --perspectives-dir /tmp/scan/perspectives \
+            --max-low-per-perspective "$MAX_LOW" \
+            "${ARGS[@]}"
+          echo "── report ──────────────────────────────────────"
+          cat /tmp/scan/report.md
+
+      # 認証情報が一つも無いケースの可視化
+      - name: No provider configured
+        if: steps.diff.outputs.skip_scan != 'true' && steps.detect.outputs.provider == 'none'
+        run: |
+          mkdir -p /tmp/scan
+          cat > /tmp/scan/report.md <<'EOF'
+          # 🛡️ LLM Security Scan
+
+          ⚠️ **LLM の認証情報が設定されていません**。
+
+          以下のいずれかを caller リポジトリの Secrets に登録してください:
+          - `OPENAI_API_KEY`（推奨）
+          - `GCP_SA_KEY`（Vertex AI 用 SA JSON）
+          - `GEMINI_API_KEY`（Generative Language API）
+          EOF
+
+      - name: Post sticky comment
+        if: steps.diff.outputs.skip_scan != 'true'
+        uses: marocchino/sticky-pull-request-comment@v2
+        with:
+          header: llm-security-scan
+          path:   /tmp/scan/report.md

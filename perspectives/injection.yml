@@ -1,0 +1,60 @@
+id: injection
+name: インジェクション (SQLi / NoSQLi / コマンド)
+enabled: true
+severity_weight: Critical
+
+# validator.py が使う「コード側」の安全パターン。
+# プロジェクト固有の安全装置 (専用クエリビルダ / ORM の特定 API 等) は overrides_path で追加する。
+code_safe_patterns:
+  - "defusedxml"                                  # XML は defusedxml でパース
+  - "BaseModel|pydantic\\.|\\.model_validate\\("  # Pydantic でバリデート済み
+  - "shlex\\.quote\\("                            # shell エスケープ済み
+  - "subprocess\\.[A-Za-z_]+\\([^)]*shell\\s*=\\s*False"  # shell=False で起動
+  - "execute\\([^,]+,\\s*\\("                     # placeholder バインド (DB-API)
+  - "prepare\\("                                  # prepared statement
+  - "parameterize|parametrize"                    # ORM のパラメタライズ系命名
+
+prompt:
+  detect_patterns: |
+    1. SQL インジェクション
+       - f-string / 文字列結合で SQL クエリを組み立て、ユーザー入力を直接埋め込み
+       - ORM の raw() / textual SQL に未バインド変数を渡す
+    2. NoSQL インジェクション (MongoDB / Firestore / DynamoDB / Redis 等)
+       - ユーザー入力をそのまま document ID / key として使用 (uid 未検証)
+       - コレクション/テーブル パスにユーザー入力を直接埋め込み
+       - クエリ条件 (where / filter) にユーザー由来オブジェクトを未検証で渡す
+    3. コマンドインジェクション
+       - os.system(), os.popen() / Node の child_process.exec / Ruby の `` (backtick) に外部入力
+       - subprocess.* / spawn を shell=True で外部入力を渡す
+       - eval(), exec(), Function() の使用
+    4. パストラバーサル (※詳細は ssrf_path 観点)
+       - open() / Path() に未検証のパスを渡す簡易検出のみ
+    5. XML インジェクション / XXE
+       - lxml / xml.etree.ElementTree など defusedxml 以外で外部 XML を解析
+       - DTD を有効化したまま外部入力を解析
+
+  safe_patterns: |
+    以下は検出しない（誤検知を避ける）:
+    - DB-API の placeholder バインド / prepared statement / ORM の bind パラメータ
+    - NoSQL クエリで Pydantic / Joi / zod / class-validator 等でバリデート済みの ID を渡す
+    - defusedxml を使った XML パース
+    - shlex.quote で shell エスケープ済み
+    - subprocess を shell=False で実行
+    - 型アノテーション付きの URL パスパラメータ (FastAPI / Express + 型ガード等)
+
+  output_schema: |
+    以下のJSON形式で出力してください。findings が空なら問題なしです。
+    JSONのみを出力し、コードフェンス（```）や説明文を付けないでください。
+    {
+      "findings": [
+        {
+          "file": "ファイルパス（diffヘッダーから取得）",
+          "line": "行番号または該当箇所の説明",
+          "severity": "Critical|High|Medium|Low",
+          "title": "問題の簡潔なタイトル",
+          "detail": "何が問題で、どう攻撃されうるか",
+          "fix": "具体的な修正案"
+        }
+      ],
+      "summary": "この観点での全体的な評価（1-2文）"
+    }

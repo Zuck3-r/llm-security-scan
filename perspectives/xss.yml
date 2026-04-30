@@ -1,0 +1,56 @@
+id: xss
+name: クロスサイトスクリプティング (XSS)
+enabled: true
+severity_weight: High
+
+# validator.py が使う「コード側」の安全パターン。
+# diff の追加行（+ 行）にこのいずれかが含まれていれば、当観点での finding を偽陽性として除外する。
+# プロンプトの safe_patterns（LLM への注意書き）と二重化することで、W1（訓練バイアス）に強くする。
+# プロジェクト固有の安全装置（特定の framework / sanitizer）は overrides_path で追加する。
+code_safe_patterns:
+  - "BaseModel|pydantic\\.|\\.model_validate\\("   # Pydantic でバリデート済み (Python)
+  - "DOMPurify"                            # 既知のサニタイザ (JS)
+  - "sanitize-html"                        # 既知のサニタイザ (JS)
+  - "bleach\\.clean\\("                    # 既知のサニタイザ (Python)
+  - "html\\.escape\\("                     # 標準ライブラリのエスケープ (Python)
+  - "escapeHtml\\("                        # 一般的な命名
+  - "htmlspecialchars\\("                  # PHP 標準
+
+prompt:
+  detect_patterns: |
+    1. DOM-based XSS（クライアント側）
+       - innerHTML / outerHTML / insertAdjacentHTML への外部入力直接代入
+       - React の dangerouslySetInnerHTML, Vue の v-html, Angular の [innerHTML]
+       - document.write / eval を経由した DOM 構築
+       - window.location, document.URL のエスケープなし表示
+    2. Reflected XSS（サーバ側）
+       - text/html 応答に外部入力をそのまま埋め込み
+       - サーバ側テンプレート / 文字列結合で HTML を組み立てている
+       - テンプレートエンジンの autoescape 無効化（Jinja2 autoescape=False, Twig raw, ERB raw, Mustache triple-mustache 等）
+    3. Stored XSS
+       - DB / データストアから取得したデータを未サニタイズで HTML 文脈に注入
+       - ユーザー入力をそのまま保存→表示するパス
+
+  safe_patterns: |
+    以下は検出しない（誤検知を避ける）:
+    - JSX / Vue mustache の {} 内変数展開（自動エスケープされる）
+    - JSON 応答（HTML ではない）
+    - 既知サニタイザ (DOMPurify / sanitize-html / bleach / html.escape / htmlspecialchars 等) を通したデータ
+    - スキーマでバリデーション済みのデータ表示
+
+  output_schema: |
+    以下のJSON形式で出力してください。findings が空なら問題なしです。
+    JSONのみを出力し、コードフェンス（```）や説明文を付けないでください。
+    {
+      "findings": [
+        {
+          "file": "ファイルパス（diffヘッダーから取得）",
+          "line": "行番号または該当箇所の説明",
+          "severity": "Critical|High|Medium|Low",
+          "title": "問題の簡潔なタイトル",
+          "detail": "何が問題で、どう攻撃されうるか",
+          "fix": "具体的な修正案"
+        }
+      ],
+      "summary": "この観点での全体的な評価（1-2文）"
+    }
