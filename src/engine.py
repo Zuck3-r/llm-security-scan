@@ -26,12 +26,45 @@ from triage import TriageStats, triage_findings  # noqa: E402
 
 
 # ── 定数 ────────────────────────────────────────────────────
-SYSTEM_PROMPT = (
+SYSTEM_PROMPT_BASE = (
     "あなたはセキュリティ診断の専門家です。\n"
     "与えられたコード差分を指定された観点で分析し、指定されたJSON形式で結果を返してください。\n"
     "JSONのみを出力し、それ以外のテキストは含めないでください。\n"
     "diff の + 行（追加された行）を重点的に分析してください。\n"
 )
+
+# プロジェクト固有の文脈 (SECURITY-CONTEXT.md) を system prompt 末尾に注入する。
+# 内製 framework の認証 decorator 名・独自 sanitizer・dev-only bypass のガード等を
+# LLM に伝えて誤検知 (W1 訓練バイアス / W2 観測の過信) を抑える。
+# 文脈は全 LLM 呼び出しで共通なので prompt cache の prefix として効く。
+_CONTEXT_HEADER = (
+    "\n\n## このリポジトリ固有の文脈\n"
+    "以下はこのプロジェクトの慣用 / 安全装置 / 既知の例外に関する説明。\n"
+    "観点の検出ルールよりこの文脈を優先せず、両方を踏まえて判定すること。\n"
+    "ここで「安全」とされる経路を見たら誤検知扱いにしてよい。\n\n"
+)
+
+
+def build_system_prompt(context_text: str = "") -> str:
+    """system prompt に SECURITY-CONTEXT を末尾追加して返す。空なら base のみ。"""
+    if not context_text or not context_text.strip():
+        return SYSTEM_PROMPT_BASE
+    return SYSTEM_PROMPT_BASE + _CONTEXT_HEADER + context_text.strip() + "\n"
+
+
+def load_context_file(path: str | None) -> str:
+    """--context で渡されたファイルを読む。空 / 存在しない / None なら空文字を返す。"""
+    if not path:
+        return ""
+    p = Path(path)
+    if not p.exists() or p.stat().st_size == 0:
+        return ""
+    try:
+        return p.read_text(encoding="utf-8")
+    except Exception as e:
+        print(f"[warn] failed to read context file {path}: {e}", file=sys.stderr)
+        return ""
+
 
 DIFF_MAX_CHARS = 30_000
 
@@ -164,7 +197,9 @@ def extract_json(content: str) -> dict:
 
 
 # ── 1 観点 = 1 LLM 呼び出し ──────────────────────────────
-async def run_perspective(provider, persp: dict, diff: str) -> ScanResult:
+async def run_perspective(
+    provider, persp: dict, diff: str, *, system_prompt: str = SYSTEM_PROMPT_BASE,
+) -> ScanResult:
     res = ScanResult(
         perspective_id   = str(persp.get("id", "")).strip(),
         perspective_name = str(persp.get("name", persp.get("id", ""))).strip(),
@@ -172,7 +207,7 @@ async def run_perspective(provider, persp: dict, diff: str) -> ScanResult:
     )
     user = build_user_prompt(persp, diff)
     try:
-        out = await provider.call(SYSTEM_PROMPT, user)
+        out = await provider.call(system_prompt, user)
     except Exception as e:
         res.error = f"{type(e).__name__}: {e}"
         return res
@@ -229,11 +264,16 @@ async def scan_diff(
     enable_triage: bool = True,
     triage_concurrency: int = 4,
     max_low_per_perspective: int = 3,
+    context_text: str = "",
 ) -> ScanContext:
     """diff 文字列を直接受け取り、検証ゲート＋（任意で）トリアージまで通した結果を返す。
 
     CLI (run_scan) と replay.py / eval.py 等の他ツールが共有する core エントリ。
     Markdown は書かない（呼び出し側で reporter.render_markdown する）。
+
+    `context_text` が非空なら SECURITY-CONTEXT として全 LLM 呼び出しの system
+    prompt 末尾に注入される。プロジェクト固有の慣用 (内製 framework の認証
+    decorator 名等) を伝えて W1 / W2 の誤検知を抑える用途。
     """
     if len(diff_text) > DIFF_MAX_CHARS:
         diff_text = diff_text[:DIFF_MAX_CHARS] + "\n... (trimmed)\n"
@@ -253,8 +293,12 @@ async def scan_diff(
     from providers import get_provider
     provider = get_provider()
 
+    # system prompt はここで 1 度だけ組み立て、全観点・全 triage ロールに同じものを
+    # 渡す (prompt cache の prefix として効かせる)
+    system_prompt = build_system_prompt(context_text)
+
     # 並列実行
-    tasks = [run_perspective(provider, p, diff_text) for p in perspectives]
+    tasks = [run_perspective(provider, p, diff_text, system_prompt=system_prompt) for p in perspectives]
     results: list[ScanResult] = list(await asyncio.gather(*tasks))
 
     # 検証ゲート
@@ -277,6 +321,7 @@ async def scan_diff(
                 added_by,
                 max_low_per_perspective = max_low_per_perspective,
                 concurrency             = triage_concurrency,
+                context_text            = context_text,
             )
         await asyncio.gather(*[_triage_for(r) for r in results if r.findings])
 
@@ -298,8 +343,10 @@ async def run_scan(
     enable_triage: bool = True,
     triage_concurrency: int = 4,
     max_low_per_perspective: int = 3,
+    context_path: str | None = None,
 ) -> int:
     diff_text = sys.stdin.read() if diff_path == "-" else Path(diff_path).read_text(encoding="utf-8")
+    context_text = load_context_file(context_path)
 
     ctx = await scan_diff(
         diff_text,
@@ -307,6 +354,7 @@ async def run_scan(
         enable_triage           = enable_triage,
         triage_concurrency      = triage_concurrency,
         max_low_per_perspective = max_low_per_perspective,
+        context_text            = context_text,
     )
 
     if ctx.total_perspectives == 0:
@@ -339,6 +387,10 @@ def build_argparser() -> argparse.ArgumentParser:
                         help="path to write the Markdown report")
     parser.add_argument("--perspectives-dir", default=str(HERE.parent / "perspectives"),
                         help="directory containing *.yml perspective definitions")
+    parser.add_argument("--context", default=None,
+                        help="path to a SECURITY-CONTEXT markdown file. its contents are "
+                             "appended to the system prompt of every LLM call (scan + triage). "
+                             "missing/empty file is treated as no context (no-op).")
     # ── Phase 2 の triage 制御 ─────────────────────────────
     parser.add_argument("--no-triage", action="store_true",
                         help="disable dialectical triage (Phase 1 behavior)")
@@ -359,6 +411,7 @@ def main() -> None:
         enable_triage           = not args.no_triage,
         triage_concurrency      = args.triage_concurrency,
         max_low_per_perspective = args.max_low_per_perspective,
+        context_path            = args.context,
     ))
     sys.exit(code)
 

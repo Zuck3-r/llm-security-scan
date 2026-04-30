@@ -16,10 +16,13 @@ on:
     branches: [main]
 jobs:
   scan:
-    uses: Zuck3-r/llm-security-scan/.github/workflows/scan.yml@v0.1.0
+    uses: Zuck3-r/llm-security-scan/.github/workflows/scan.yml@v0.2.0
     with:
       overrides_path: ""                # プロジェクト固有の設定がある場合に指定
       perspectives_disabled: ""         # 無効にする観点 (e.g. "secrets,xss")
+      # context_path: .github/security-scan-overrides/SECURITY-CONTEXT.md
+      # scan_exclude_extensions: "md,markdown,..."   # default で十分なことが多い
+      # scan_extra_excludes: ":(exclude)docs/** :(exclude)scripts/**"
     secrets:
       OPENAI_API_KEY:  ${{ secrets.OPENAI_API_KEY }}
       GCP_SA_KEY:      ${{ secrets.GCP_SA_KEY }}
@@ -67,15 +70,74 @@ jobs:
 
 ## プロジェクト固有のカスタマイズ
 
-`overrides_path` にプロジェクト固有の perspectives / triage_prompts を置くと、汎用デフォルトを上書き・追加できる。
+汎用デフォルトを caller リポジトリ側で上書き・拡張する仕組みは 2 種類あります。
+
+### (A) `SECURITY-CONTEXT.md` — LLM へ意味的な文脈を渡す
+
+内製 framework の認証 decorator 名・独自 sanitizer・dev-only bypass のガード条件など「文字列マッチでは表現しきれない意味」を LLM に伝える markdown ファイル。指定すると **scan の 5 観点と triage の Attacker / Defender / Judge すべての system prompt 末尾**に注入されます。
+
+```yaml
+with:
+  overrides_path: .github/security-scan-overrides
+  context_path:   .github/security-scan-overrides/SECURITY-CONTEXT.md
+```
+
+`context_path` が空のとき `${overrides_path}/SECURITY-CONTEXT.md` が fallback として読まれます。両方無ければ no-op。
+
+例: `.github/security-scan-overrides/SECURITY-CONTEXT.md`
+
+```markdown
+# このリポジトリの認証・認可の慣用
+
+## 認証 decorator
+- `@authed` は当社内製 framework の認証 decorator。Cookie の JWT を検証する。
+- `@require_user(role="admin")` は admin 権限ガード。
+
+## 安全なクエリ経路
+- `db.q("SELECT ...", $1, $2)` は内製 ORM の placeholder バインド。SQLi 安全。
+
+## 既知の dev-only bypass
+- `if env.DEV_AUTH_OFF:` は production 起動時に RuntimeError で死ぬガードが
+  auth/init.py:42 にある。dev でしか動かない。
+```
+
+LLM は「`@authed` を見たら認証ガード扱い」「`db.q` の placeholder は安全」と判定できるようになります。文脈は全 LLM 呼び出しで共通なので prompt cache の prefix として効き、コストはほぼ増えません。
+
+### (B) `overrides_path` — perspectives / triage_prompts を上書き
+
+正規表現の `code_safe_patterns` を増やしたい / 独自観点を 1 ファイルで追加したい場合：
 
 ```
 .github/security-scan-overrides/
+├── SECURITY-CONTEXT.md   # (A) — LLM への意味的な文脈
 ├── perspectives/
-│   ├── auth.yml          # code_safe_patterns にプロジェクト固有のものを追加
-│   └── custom.yml        # 独自の観点を追加
-└── triage_prompts.yml    # triage プロンプトを上書き
+│   ├── auth.yml          # code_safe_patterns にプロジェクト固有の正規表現を追加
+│   └── payment.yml       # 独自の観点を追加 (ファイル名は任意)
+└── triage_prompts.yml    # triage プロンプトを丸ごと上書き
 ```
+
+マージ規則: 同名 yml は overlay で上書き、新規 yml は追加観点として読み込み、`triage_prompts.yml` は丸ごと差し替え。
+
+### 使い分け
+
+- 「`@authed` という decorator が認証ガード」みたいな**意味的な情報**は (A)
+- 「正規表現で機械的に弾きたい / 観点を 1 つ増やしたい」は (B)
+- 両方併用 OK
+
+
+## スキャン対象の絞り込み
+
+default は **fail-safe なブラックリスト方式**: ランタイムに載らないファイル (md / json / lock / 画像 等) だけを除外し、それ以外は全部スキャンします。Go / Ruby / Java / PHP 等の言語は何も設定しなくても対象に入ります。
+
+| input | 用途 | default |
+|---|---|---|
+| `scan_exclude_extensions` | 除外する拡張子 (CSV, ドット無し) | `md,markdown,txt,rst,yml,yaml,json,jsonc,lock,toml,cfg,ini,gitignore,dockerignore,editorconfig,svg,png,jpg,jpeg,gif,webp,ico,pdf,csv,tsv` |
+| `scan_extra_excludes` | 追加の git pathspec (空白区切り) | 空 |
+
+注意:
+- `.env` は意図的に除外していません（誤コミットされた secrets を検出する観点で価値が高いため）
+- `tests/`, `dist/`, `build/`, `node_modules/`, `vendor/`, ロックファイル等の path-based 除外は固定で内蔵
+- diff が 30,000 文字を超えると engine 側でトリミングされます (`engine.py:DIFF_MAX_CHARS`)
 
 
 ## コスト目安
@@ -102,6 +164,7 @@ export OPENAI_API_KEY=sk-...
 python replay.py --pr 42                       # 単発
 python replay.py --pr-range 1..100             # 範囲
 python replay.py --pr 42 --repo owner/name     # 別リポを対象に
+python replay.py --pr 42 --context SECURITY-CONTEXT.md   # 文脈を注入して走らせる
 python replay.py --pr-range 1..50 --no-triage  # コスト節約モード
 ```
 

@@ -11,10 +11,35 @@ on:
         description: "無効化する perspective id (comma 区切り。例: 'secrets,xss')"
         type: string
         default: ""
-      scan_targets:
-        description: "diff 対象のファイルパターン (空白区切り)"
+      # ── スキャン対象の絞り込み (ブラックリスト方式) ────────────────
+      # 設計方針: default では「全部見る」。明らかにランタイムに載らない
+      # 拡張子 (md / json / lock / 画像 等) だけを default で除外する。
+      # 新しい言語 (Go / Ruby / Java / PHP 等) は何もしなくても対象に入る (fail-safe)。
+      # `.env` は意図的に除外していない: 誤コミットされた secrets を検出する観点で価値が高い。
+      scan_exclude_extensions:
+        description: |
+          diff から除外する拡張子 (CSV, ドット無し)。default はランタイムに
+          載らないファイル (md/markdown/txt/rst/yml/yaml/json/jsonc/lock/toml/cfg/
+          ini/gitignore/dockerignore/editorconfig/svg/png/jpg/jpeg/gif/webp/ico/
+          pdf/csv/tsv)。`.env` は意図的に含めていない (secrets 検出のため)。
         type: string
-        default: "*.py *.ts *.tsx *.js *.jsx"
+        default: "md,markdown,txt,rst,yml,yaml,json,jsonc,lock,toml,cfg,ini,gitignore,dockerignore,editorconfig,svg,png,jpg,jpeg,gif,webp,ico,pdf,csv,tsv"
+      scan_extra_excludes:
+        description: |
+          追加の git pathspec 除外 (空白区切り)。例: `':(exclude)docs/**' ':(exclude)scripts/**'`
+          プロジェクト固有のディレクトリを除外したい場合に。
+        type: string
+        default: ""
+      # ── プロジェクト固有の文脈 ────────────────────────────────
+      context_path:
+        description: |
+          SECURITY-CONTEXT markdown へのパス (caller repo 内)。
+          指定すると全 LLM 呼び出し (スキャン + トリアージ) の system prompt
+          末尾に注入される。内製 framework の認証 decorator 名や独自 sanitizer の
+          説明を書いて誤検知を抑える。未指定なら overrides_path/SECURITY-CONTEXT.md
+          を fallback で見る。両方無ければ context 注入なし。
+        type: string
+        default: ""
       max_low_per_perspective:
         description: "Low severity の triage 上限 (rest は status=raw)"
         type: number
@@ -66,34 +91,59 @@ jobs:
         with:
           python-version: '3.12'
 
-      # 3) diff 計算
+      # 3) diff 計算 (ブラックリスト方式)
+      #
+      # default で「全部見る」。`scan_exclude_extensions` で明らかに無意味な
+      # 拡張子だけ除外。固定の path-based 除外 (tests/dist/build/node_modules ...)
+      # は維持。新しい言語が出ても何もしなくても対象に入る (fail-safe)。
       - name: Compute diff
         id: diff
         env:
-          BASE_REF:      ${{ github.base_ref }}
-          SCAN_TARGETS:  ${{ inputs.scan_targets }}
+          BASE_REF:        ${{ github.base_ref }}
+          EXCLUDE_EXTS:    ${{ inputs.scan_exclude_extensions }}
+          EXTRA_EXCLUDES:  ${{ inputs.scan_extra_excludes }}
         run: |
           set -euo pipefail
           mkdir -p /tmp/scan
           DIFF_FILE=/tmp/scan/diff.patch
-          # SCAN_TARGETS を空白区切り → git pathspec 配列へ
-          PATHSPEC=()
-          for pat in $SCAN_TARGETS; do PATHSPEC+=("$pat"); done
-          # 除外: 依存・ビルド成果物・テスト・Storybook
-          git diff "origin/${BASE_REF}...HEAD" -- "${PATHSPEC[@]}" \
+
+          # 拡張子ベースの :(exclude) を組み立て
+          EXCL=()
+          IFS=',' read -ra EXTS <<< "$EXCLUDE_EXTS"
+          for ext in "${EXTS[@]}"; do
+            ext="$(echo "$ext" | xargs)"
+            [ -z "$ext" ] && continue
+            EXCL+=(":(exclude)**/*.${ext}")
+          done
+          # caller 由来の追加 pathspec exclude
+          for p in $EXTRA_EXCLUDES; do EXCL+=("$p"); done
+
+          # 全てのファイルを対象に diff を取り、ブラックリストで除外
+          git diff "origin/${BASE_REF}...HEAD" -- . \
+            "${EXCL[@]}" \
             ':(exclude)**/*.d.ts' \
             ':(exclude)package-lock.json' \
             ':(exclude)**/package-lock.json' \
+            ':(exclude)**/yarn.lock' \
+            ':(exclude)**/pnpm-lock.yaml' \
+            ':(exclude)**/poetry.lock' \
+            ':(exclude)**/Cargo.lock' \
+            ':(exclude)**/Gemfile.lock' \
+            ':(exclude)**/go.sum' \
             ':(exclude)**/node_modules/**' \
+            ':(exclude)**/vendor/**' \
             ':(exclude)**/dist/**' \
             ':(exclude)**/build/**' \
+            ':(exclude)**/out/**' \
             ':(exclude)**/.next/**' \
+            ':(exclude)**/.nuxt/**' \
             ':(exclude)**/coverage/**' \
             ':(exclude)**/__pycache__/**' \
             ':(exclude)**/tests/**' \
             ':(exclude)**/__tests__/**' \
             ':(exclude)**/test_*.py' \
             ':(exclude)**/*_test.py' \
+            ':(exclude)**/*_test.go' \
             ':(exclude)**/*.test.ts' \
             ':(exclude)**/*.test.tsx' \
             ':(exclude)**/*.test.js' \
@@ -121,8 +171,9 @@ jobs:
       - name: Merge overrides
         if: steps.diff.outputs.skip_scan != 'true'
         env:
-          OVERRIDES: ${{ inputs.overrides_path }}
-          DISABLED:  ${{ inputs.perspectives_disabled }}
+          OVERRIDES:    ${{ inputs.overrides_path }}
+          DISABLED:     ${{ inputs.perspectives_disabled }}
+          CONTEXT_PATH: ${{ inputs.context_path }}
         run: |
           set -euo pipefail
           mkdir -p /tmp/scan/perspectives
@@ -147,6 +198,22 @@ jobs:
           # triage.py は src/ の親 (= .llm-security-scan/) を探しに行くので
           # マージ後の triage_prompts.yml をそこへ反映する
           cp /tmp/scan/triage_prompts.yml .llm-security-scan/triage_prompts.yml
+
+          # SECURITY-CONTEXT を /tmp/scan/context.md に確定。
+          # 優先順:
+          #   1) inputs.context_path で明示指定されたファイル
+          #   2) overrides_path/SECURITY-CONTEXT.md (規約 fallback)
+          #   3) 何もない → 空ファイル (engine.py 側で no-op 扱い)
+          : > /tmp/scan/context.md
+          if [ -n "$CONTEXT_PATH" ] && [ -f "$CONTEXT_PATH" ]; then
+            cp "$CONTEXT_PATH" /tmp/scan/context.md
+            echo "[context] using $CONTEXT_PATH ($(wc -c < /tmp/scan/context.md) bytes)"
+          elif [ -n "$OVERRIDES" ] && [ -f "$OVERRIDES/SECURITY-CONTEXT.md" ]; then
+            cp "$OVERRIDES/SECURITY-CONTEXT.md" /tmp/scan/context.md
+            echo "[context] using $OVERRIDES/SECURITY-CONTEXT.md ($(wc -c < /tmp/scan/context.md) bytes)"
+          else
+            echo "[context] no SECURITY-CONTEXT.md provided (no-op)"
+          fi
 
       # 5) provider 検出 (OpenAI > Vertex > Gemini)
       - name: Detect provider
@@ -198,6 +265,7 @@ jobs:
             --diff /tmp/scan/diff.patch \
             --output /tmp/scan/report.md \
             --perspectives-dir /tmp/scan/perspectives \
+            --context /tmp/scan/context.md \
             --max-low-per-perspective "$MAX_LOW" \
             "${ARGS[@]}"
           echo "── report ──────────────────────────────────────"
