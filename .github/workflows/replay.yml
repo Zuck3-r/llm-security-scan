@@ -1,0 +1,118 @@
+name: Replay PRs
+
+# 過去 PR を回して replays/PR-<n>.json を artifact にする (CLAUDE.md §9 Step 1)。
+# eval ケースを手書きするより、過去 PR の出力を目視レビューして「答案確定」できた
+# ものを evals/cases/ にコピーするためのフィードバックループの起点。
+#
+# このリポ自身は被診断対象を持たないので、典型的な使い方は別リポ (Beacon 等) から
+# このリポを checkout して `python replay.py --pr-range A..B --repo owner/name` を
+# 走らせること。本 workflow_dispatch ジョブは llm-security-scan 自身に対して走るが、
+# `repo` input を変えれば任意の public repo を対象にできる。
+
+on:
+  workflow_dispatch:
+    inputs:
+      pr:
+        description: "single PR number (e.g. '42'); 'pr_range' と排他"
+        type: string
+        default: ""
+      pr_range:
+        description: "PR range (e.g. '1..100'); 'pr' と排他"
+        type: string
+        default: ""
+      repo:
+        description: "owner/name (default: このリポジトリ)"
+        type: string
+        default: ""
+      no_triage:
+        description: "弁証法的トリアージをスキップ (トークン節約)"
+        type: boolean
+        default: false
+      max_low_per_perspective:
+        description: "Low severity の triage 上限"
+        type: number
+        default: 3
+
+permissions:
+  contents: read
+
+jobs:
+  replay:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      # provider 検出 (scan.yml と同ロジック)
+      - name: Detect provider
+        id: detect
+        env:
+          HAS_OPENAI: ${{ secrets.OPENAI_API_KEY != '' }}
+          HAS_GCP_SA: ${{ secrets.GCP_SA_KEY     != '' }}
+          HAS_GEMINI: ${{ secrets.GEMINI_API_KEY != '' }}
+        run: |
+          if   [ "$HAS_OPENAI" = "true" ]; then echo "provider=openai" >> "$GITHUB_OUTPUT"
+          elif [ "$HAS_GCP_SA" = "true" ]; then echo "provider=vertex" >> "$GITHUB_OUTPUT"
+          elif [ "$HAS_GEMINI" = "true" ]; then echo "provider=gemini" >> "$GITHUB_OUTPUT"
+          else
+            echo "provider=none" >> "$GITHUB_OUTPUT"
+            echo "::error::No LLM provider credential available (OPENAI_API_KEY / GCP_SA_KEY / GEMINI_API_KEY)"
+            exit 1
+          fi
+
+      - name: Authenticate to GCP (Vertex AI)
+        if: steps.detect.outputs.provider == 'vertex'
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Install dependencies
+        run: pip install --quiet -r requirements.txt
+
+      - name: Validate inputs
+        env:
+          PR:    ${{ inputs.pr }}
+          RANGE: ${{ inputs.pr_range }}
+        run: |
+          if [ -z "$PR" ] && [ -z "$RANGE" ]; then
+            echo "::error::Either 'pr' or 'pr_range' must be provided."
+            exit 2
+          fi
+          if [ -n "$PR" ] && [ -n "$RANGE" ]; then
+            echo "::error::'pr' and 'pr_range' are mutually exclusive."
+            exit 2
+          fi
+
+      - name: Run replay
+        env:
+          LLM_PROVIDER:          ${{ steps.detect.outputs.provider }}
+          OPENAI_API_KEY:        ${{ secrets.OPENAI_API_KEY }}
+          GOOGLE_CLOUD_PROJECT:  ${{ vars.GCP_PROJECT  || 'CHANGE_ME' }}
+          GOOGLE_CLOUD_LOCATION: ${{ vars.GCP_LOCATION || 'us-central1' }}
+          GEMINI_API_KEY:        ${{ secrets.GEMINI_API_KEY }}
+          LLM_MODEL:             ${{ vars.LLM_MODEL || 'gpt-4o-mini' }}
+          # gh CLI 認証
+          GH_TOKEN:              ${{ secrets.GITHUB_TOKEN }}
+          PR:                    ${{ inputs.pr }}
+          RANGE:                 ${{ inputs.pr_range }}
+          REPO:                  ${{ inputs.repo }}
+          NO_TRIAGE:             ${{ inputs.no_triage }}
+          MAX_LOW:               ${{ inputs.max_low_per_perspective }}
+        run: |
+          ARGS=(--max-low-per-perspective "$MAX_LOW")
+          [ -n "$PR" ]    && ARGS+=(--pr "$PR")
+          [ -n "$RANGE" ] && ARGS+=(--pr-range "$RANGE")
+          [ -n "$REPO" ]  && ARGS+=(--repo "$REPO")
+          [ "$NO_TRIAGE" = "true" ] && ARGS+=(--no-triage)
+          python3 replay.py "${ARGS[@]}"
+
+      - name: Upload replays artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: replays
+          path: replays/
+          if-no-files-found: warn

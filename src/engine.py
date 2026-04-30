@@ -211,25 +211,43 @@ async def run_perspective(provider, persp: dict, diff: str) -> ScanResult:
     return res
 
 
-# ── メイン ───────────────────────────────────────────────
-async def run_scan(
-    diff_path: str,
-    output_path: str,
+# ── プログラム経由のエントリポイント ───────────────────────
+@dataclass
+class ScanContext:
+    """`scan_diff` の戻り値。Markdown レンダリングや replay/eval の集計に使う。"""
+    results:            list[ScanResult]
+    provider_name:      str
+    model:              str
+    total_perspectives: int
+    triage_enabled:     bool
+
+
+async def scan_diff(
+    diff_text: str,
     perspectives_dir: Path,
     *,
     enable_triage: bool = True,
     triage_concurrency: int = 4,
     max_low_per_perspective: int = 3,
-) -> int:
-    diff_text = sys.stdin.read() if diff_path == "-" else Path(diff_path).read_text(encoding="utf-8")
+) -> ScanContext:
+    """diff 文字列を直接受け取り、検証ゲート＋（任意で）トリアージまで通した結果を返す。
+
+    CLI (run_scan) と replay.py / eval.py 等の他ツールが共有する core エントリ。
+    Markdown は書かない（呼び出し側で reporter.render_markdown する）。
+    """
     if len(diff_text) > DIFF_MAX_CHARS:
         diff_text = diff_text[:DIFF_MAX_CHARS] + "\n... (trimmed)\n"
     diff_files, added_by = parse_diff(diff_text)
 
     perspectives = load_perspectives(perspectives_dir)
     if not perspectives:
-        Path(output_path).write_text("# 🛡️ LLM Security Scan\n\nNo enabled perspectives.\n", encoding="utf-8")
-        return 0
+        return ScanContext(
+            results            = [],
+            provider_name      = "",
+            model              = "",
+            total_perspectives = 0,
+            triage_enabled     = enable_triage,
+        )
 
     # provider はここで初めて env を解決（--help では到達しない）
     from providers import get_provider
@@ -262,14 +280,49 @@ async def run_scan(
             )
         await asyncio.gather(*[_triage_for(r) for r in results if r.findings])
 
-    # レポート
-    from reporter import render_markdown
-    md = render_markdown(
-        results,
+    return ScanContext(
+        results            = results,
         provider_name      = provider.name,
         model              = provider.model,
         total_perspectives = len(perspectives),
         triage_enabled     = enable_triage,
+    )
+
+
+# ── CLI ラッパー ────────────────────────────────────────────
+async def run_scan(
+    diff_path: str,
+    output_path: str,
+    perspectives_dir: Path,
+    *,
+    enable_triage: bool = True,
+    triage_concurrency: int = 4,
+    max_low_per_perspective: int = 3,
+) -> int:
+    diff_text = sys.stdin.read() if diff_path == "-" else Path(diff_path).read_text(encoding="utf-8")
+
+    ctx = await scan_diff(
+        diff_text,
+        perspectives_dir,
+        enable_triage           = enable_triage,
+        triage_concurrency      = triage_concurrency,
+        max_low_per_perspective = max_low_per_perspective,
+    )
+
+    if ctx.total_perspectives == 0:
+        Path(output_path).write_text(
+            "# 🛡️ LLM Security Scan\n\nNo enabled perspectives.\n",
+            encoding="utf-8",
+        )
+        return 0
+
+    from reporter import render_markdown
+    md = render_markdown(
+        ctx.results,
+        provider_name      = ctx.provider_name,
+        model              = ctx.model,
+        total_perspectives = ctx.total_perspectives,
+        triage_enabled     = ctx.triage_enabled,
     )
     Path(output_path).write_text(md, encoding="utf-8")
     return 0
