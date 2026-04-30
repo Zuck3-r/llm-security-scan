@@ -1,0 +1,6 @@
+# Runtime dependencies for llm-security-scan
+# scan.yml / replay.yml の Install dependencies と同じ集合
+openai>=1.50
+google-cloud-aiplatform>=1.71
+google-generativeai>=0.8
+pyyaml

@@ -16,7 +16,7 @@ on:
     branches: [main]
 jobs:
   scan:
-    uses: Zuck3-r/llm-security-scan/.github/workflows/scan.yml@v1
+    uses: Zuck3-r/llm-security-scan/.github/workflows/scan.yml@v0.1.0
     with:
       overrides_path: ""                # プロジェクト固有の設定がある場合に指定
       perspectives_disabled: ""         # 無効にする観点 (e.g. "secrets,xss")
@@ -35,6 +35,8 @@ jobs:
 | 1 (推奨) | `OPENAI_API_KEY` | OpenAI API キー |
 | 2 | `GCP_SA_KEY` | GCP サービスアカウント JSON (Vertex AI) |
 | 3 | `GEMINI_API_KEY` | Generative Language API キー |
+
+**Vertex AI を使う場合のみ**: Settings → Variables に `GCP_PROJECT` を追加して GCP プロジェクト ID を設定してください（未設定だと `CHANGE_ME` で API 呼び出しが失敗します）。`GCP_LOCATION` (default: `us-central1`) と `LLM_MODEL` (default: `gpt-4o-mini`) も同様に Variables で上書き可能です。
 
 ### 3. PR を作成
 
@@ -85,6 +87,41 @@ jobs:
 
 ※ 5 観点 + triage の場合。`perspectives_disabled` で観点を減らすと比例して減少。
 
+
+## Replay モード (Step 1)
+
+過去 PR をまとめてスキャンして JSON で記録するモード。eval ケースを手書きするより、過去 PR を回して目視で「答案確定」できたものを `evals/cases/` に昇格させるためのフィードバックループの起点になる。
+
+### ローカル実行
+
+```bash
+pip install -r requirements.txt
+gh auth login                         # GitHub CLI で認証
+export OPENAI_API_KEY=sk-...
+
+python replay.py --pr 42                       # 単発
+python replay.py --pr-range 1..100             # 範囲
+python replay.py --pr 42 --repo owner/name     # 別リポを対象に
+python replay.py --pr-range 1..50 --no-triage  # コスト節約モード
+```
+
+出力: `replays/PR-<n>.json`
+
+```json
+{
+  "pr_number": 42,
+  "title":     "...",
+  "merged_at": "2026-04-15T03:21:00Z",
+  "diff_stats": { "files": 5, "additions": 230, "deletions": 12 },
+  "findings":   [ /* 検証ゲート通過後・トリアージ済み */ ],
+  "triage":     { "confirmed": 1, "dismissed": 2, "inconclusive": 0, "raw": 0 },
+  "tokens":     { "scan_in": 1234, "scan_out": 567, "triage_in": 890, "triage_out": 123 }
+}
+```
+
+### CI 経由 (workflow_dispatch)
+
+`.github/workflows/replay.yml` を Run workflow から起動。`pr` または `pr_range` を入力すると `replays/*.json` が artifact としてアップロードされる。
 
 ## Eval スコア
 
