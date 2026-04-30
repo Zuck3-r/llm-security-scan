@@ -29,7 +29,7 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE / "src"))
 
 # scan_diff を import すると providers / triage がロードされるが env 解決は遅延。
-from engine import scan_diff  # noqa: E402
+from engine import scan_diff, load_context_file  # noqa: E402
 
 
 # ── gh の薄いラッパー ──────────────────────────────────────
@@ -128,6 +128,7 @@ async def replay_one(
     triage_concurrency:      int,
     max_low_per_perspective: int,
     force:                   bool,
+    context_text:            str = "",
 ) -> Path:
     out_path = out_dir / f"PR-{pr_number}.json"
     if out_path.exists() and not force:
@@ -145,6 +146,7 @@ async def replay_one(
         enable_triage           = enable_triage,
         triage_concurrency      = triage_concurrency,
         max_low_per_perspective = max_low_per_perspective,
+        context_text            = context_text,
     )
 
     payload = {
@@ -187,6 +189,10 @@ async def _amain(args: argparse.Namespace) -> int:
 
     out_dir = Path(args.output_dir)
     perspectives_dir = Path(args.perspectives_dir)
+    context_text = load_context_file(args.context)
+    if context_text:
+        print(f"[context] loaded {len(context_text)} chars from {args.context}",
+              file=sys.stderr)
 
     failures = 0
     for n in prs:
@@ -197,6 +203,7 @@ async def _amain(args: argparse.Namespace) -> int:
                 triage_concurrency      = args.triage_concurrency,
                 max_low_per_perspective = args.max_low_per_perspective,
                 force                   = args.force,
+                context_text            = context_text,
             )
         except subprocess.CalledProcessError as e:
             stderr = (e.stderr or "").strip()
@@ -225,6 +232,9 @@ def build_argparser() -> argparse.ArgumentParser:
                    help="directory to write PR-<n>.json files (default: ./replays)")
     p.add_argument("--perspectives-dir", default=str(HERE / "perspectives"),
                    help="perspectives directory (default: ./perspectives)")
+    p.add_argument("--context", default=None,
+                   help="path to a SECURITY-CONTEXT markdown file to inject into all "
+                        "LLM system prompts (scan + triage). missing/empty = no-op.")
     p.add_argument("--no-triage", action="store_true",
                    help="disable dialectical triage to save tokens")
     p.add_argument("--triage-concurrency", type=int, default=4,

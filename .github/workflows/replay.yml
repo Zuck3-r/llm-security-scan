@@ -4,9 +4,9 @@ name: Replay PRs
 # eval ケースを手書きするより、過去 PR の出力を目視レビューして「答案確定」できた
 # ものを evals/cases/ にコピーするためのフィードバックループの起点。
 #
-# このリポ自身は被診断対象を持たないので、典型的な使い方は別リポ (Beacon 等) から
-# このリポを checkout して `python replay.py --pr-range A..B --repo owner/name` を
-# 走らせること。本 workflow_dispatch ジョブは llm-security-scan 自身に対して走るが、
+# このリポ自身は被診断対象を持たないので、典型的な使い方は対象リポ側で本リポを
+# checkout して `python replay.py --pr-range A..B --repo owner/name` を走らせること。
+# 本 workflow_dispatch ジョブは llm-security-scan 自身に対しても走るが、
 # `repo` input を変えれば任意の public repo を対象にできる。
 
 on:
@@ -32,6 +32,10 @@ on:
         description: "Low severity の triage 上限"
         type: number
         default: 3
+      context_path:
+        description: "SECURITY-CONTEXT markdown へのパス (このリポ内)。空なら ./SECURITY-CONTEXT.md を fallback で見る。"
+        type: string
+        default: ""
 
 permissions:
   contents: read
@@ -101,12 +105,22 @@ jobs:
           REPO:                  ${{ inputs.repo }}
           NO_TRIAGE:             ${{ inputs.no_triage }}
           MAX_LOW:               ${{ inputs.max_low_per_perspective }}
+          CONTEXT_PATH:          ${{ inputs.context_path }}
         run: |
           ARGS=(--max-low-per-perspective "$MAX_LOW")
           [ -n "$PR" ]    && ARGS+=(--pr "$PR")
           [ -n "$RANGE" ] && ARGS+=(--pr-range "$RANGE")
           [ -n "$REPO" ]  && ARGS+=(--repo "$REPO")
           [ "$NO_TRIAGE" = "true" ] && ARGS+=(--no-triage)
+          # SECURITY-CONTEXT 解決:
+          #   1) input で明示指定
+          #   2) リポ直下の SECURITY-CONTEXT.md を fallback
+          #   3) どちらも無ければ context 注入なし
+          if [ -n "$CONTEXT_PATH" ] && [ -f "$CONTEXT_PATH" ]; then
+            ARGS+=(--context "$CONTEXT_PATH")
+          elif [ -f SECURITY-CONTEXT.md ]; then
+            ARGS+=(--context SECURITY-CONTEXT.md)
+          fi
           python3 replay.py "${ARGS[@]}"
 
       - name: Upload replays artifact

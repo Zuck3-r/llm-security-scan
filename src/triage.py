@@ -111,6 +111,21 @@ _ATTACKER_OUTPUT_SCHEMA = _PROMPTS["attacker"]["output_schema"]
 _DEFENDER_OUTPUT_SCHEMA = _PROMPTS["defender"]["output_schema"]
 _JUDGE_OUTPUT_SCHEMA    = _PROMPTS["judge"]["output_schema"]
 
+# プロジェクト固有の文脈 (SECURITY-CONTEXT.md) を triage の各ロール system prompt
+# 末尾に注入する。engine._CONTEXT_HEADER と同じ wording を triage 用に少し調整。
+_CONTEXT_HEADER = (
+    "\n\n## このリポジトリ固有の文脈\n"
+    "以下はこのプロジェクトの慣用 / 安全装置 / 既知の例外に関する説明。\n"
+    "このロールの判定は、観点ルールとこの文脈の双方を踏まえて行うこと。\n\n"
+)
+
+
+def _with_context(system_prompt: str, context_text: str) -> str:
+    """ロール system prompt 末尾に SECURITY-CONTEXT を追加して返す。空文字なら no-op。"""
+    if not context_text or not context_text.strip():
+        return system_prompt
+    return system_prompt + _CONTEXT_HEADER + context_text.strip() + "\n"
+
 
 def _build_finding_block(f: Finding, code_context: str) -> str:
     """Attacker / Defender / Judge 共通で渡す finding コンテキスト。"""
@@ -193,19 +208,27 @@ async def _call_role(
     )
 
 
-async def _triage_one(provider, f: Finding, code_context: str) -> tuple[Finding, int, int]:
+async def _triage_one(
+    provider, f: Finding, code_context: str, *, context_text: str = "",
+) -> tuple[Finding, int, int]:
     """1 finding に対して Attacker / Defender / Judge を順に呼ぶ。
 
     Attacker と Defender は並列、Judge はその結果を待ってから 1 回。
     fail-open: いずれかが失敗しても finding は消さず inconclusive にする。
+
+    `context_text` が非空なら全ロールの system prompt 末尾に注入される。
     """
     block = _build_finding_block(f, code_context)
     attacker_user = block + _ATTACKER_OUTPUT_SCHEMA
     defender_user = block + _DEFENDER_OUTPUT_SCHEMA
 
+    attacker_sys = _with_context(_ATTACKER_SYSTEM, context_text)
+    defender_sys = _with_context(_DEFENDER_SYSTEM, context_text)
+    judge_sys    = _with_context(_JUDGE_SYSTEM,    context_text)
+
     attacker_res, defender_res = await asyncio.gather(
-        _call_role(provider, _ATTACKER_SYSTEM, attacker_user),
-        _call_role(provider, _DEFENDER_SYSTEM, defender_user),
+        _call_role(provider, attacker_sys, attacker_user),
+        _call_role(provider, defender_sys, defender_user),
     )
 
     tokens_in  = attacker_res.tokens_in  + defender_res.tokens_in
@@ -240,7 +263,7 @@ async def _triage_one(provider, f: Finding, code_context: str) -> tuple[Finding,
         + "\n"
         + _JUDGE_OUTPUT_SCHEMA
     )
-    judge_res = await _call_role(provider, _JUDGE_SYSTEM, judge_user)
+    judge_res = await _call_role(provider, judge_sys, judge_user)
     tokens_in  += judge_res.tokens_in
     tokens_out += judge_res.tokens_out
 
@@ -326,11 +349,15 @@ async def triage_findings(
     *,
     max_low_per_perspective: int = DEFAULT_MAX_LOW_PER_PERSPECTIVE,
     concurrency: int = 4,
+    context_text: str = "",
 ) -> tuple[list[Finding], TriageStats]:
     """全 finding を triage する。並列度は `concurrency` で制限。
 
     返り値: (更新済み finding list, 集計値)
     findings の順序・件数は変えない（Phase 1 後段の互換性維持）。
+
+    `context_text` は SECURITY-CONTEXT.md の中身。各ロールの system prompt
+    末尾に注入される。空なら何もしない。
     """
     stats = TriageStats()
     if not findings:
@@ -346,7 +373,7 @@ async def triage_findings(
     async def _bounded(f: Finding) -> tuple[Finding, int, int]:
         async with sem:
             ctx = _code_context_for(f, diff_added_lines_by_file)
-            return await _triage_one(provider, f, ctx)
+            return await _triage_one(provider, f, ctx, context_text=context_text)
 
     results = await asyncio.gather(*[_bounded(f) for f in queued])
 
