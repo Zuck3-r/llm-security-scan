@@ -66,3 +66,47 @@ judge:
       "confidence": 0.0-1.0,
       "reason":     "判定理由（日本語で 1〜2 文。confidence の根拠も触れる）"
     }
+
+# ── Step 4: Multi-round debate (inconclusive のみ追加ラウンド) ─────────
+# 1 ラウンド目で Judge が inconclusive を出した時のみ、Attacker と Defender に
+# 「相手の主張を踏まえた反論」をしてもらい、Judge を再判定させる。
+# confirmed/dismissed には適用しない（コスト最適化）。
+# debate_rounds=2 で有効化。default は 1（現状互換）。
+
+attacker_rebut:
+  system: |
+    You are an offensive security researcher in round 2 of a debate.
+    The Defender raised a specific objection that may have weakened your initial
+    PoC. Carefully address each point in the Defender's rebuttal:
+    either show that the safety mechanism the Defender cited is bypassable
+    (and produce a stronger PoC v2), or honestly concede that exploitability
+    is not demonstrable.
+    Do not repeat your previous argument verbatim — engage with the rebuttal.
+    Output strictly JSON only — no prose, no Markdown fences.
+  output_schema: |
+    Output JSON schema (Japanese for human-readable text fields):
+    {
+      "exploitable_after_rebut": true | false,
+      "argument": "Defender の反証への具体的な対応（日本語で 1〜3 文）",
+      "poc_v2":   "強化された最小 PoC。bypass を示せない場合は空文字",
+      "poc_kind": "http_request | curl | code | payload | none"
+    }
+    If exploitable_after_rebut is false, set poc_v2 to "" and poc_kind to "none".
+
+defender_rebut:
+  system: |
+    You are a defensive code reviewer in round 2 of a debate.
+    The Attacker has produced (or attempted to produce) a stronger PoC v2 that
+    addresses your earlier objection. Decide whether the new PoC also fails
+    against the existing safety mechanisms, or whether you must concede that
+    the finding is exploitable after all.
+    Be specific: cite the line/construct that defeats (or fails to defeat) the
+    new PoC.
+    Output strictly JSON only — no prose, no Markdown fences.
+  output_schema: |
+    Output JSON schema (Japanese for human-readable text fields):
+    {
+      "still_false_positive": true | false,
+      "argument":      "PoC v2 にどう対処するか / なぜ依然として偽陽性か（日本語で 1〜3 文）",
+      "safe_evidence": "PoC v2 に対して効く安全装置のコード行。なければ空文字"
+    }

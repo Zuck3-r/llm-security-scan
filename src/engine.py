@@ -265,6 +265,7 @@ async def scan_diff(
     triage_concurrency: int = 4,
     max_low_per_perspective: int = 3,
     context_text: str = "",
+    debate_rounds: int = 1,
 ) -> ScanContext:
     """diff 文字列を直接受け取り、検証ゲート＋（任意で）トリアージまで通した結果を返す。
 
@@ -322,6 +323,7 @@ async def scan_diff(
                 max_low_per_perspective = max_low_per_perspective,
                 concurrency             = triage_concurrency,
                 context_text            = context_text,
+                debate_rounds           = debate_rounds,
             )
         await asyncio.gather(*[_triage_for(r) for r in results if r.findings])
 
@@ -344,6 +346,7 @@ async def run_scan(
     triage_concurrency: int = 4,
     max_low_per_perspective: int = 3,
     context_path: str | None = None,
+    debate_rounds: int = 1,
 ) -> int:
     diff_text = sys.stdin.read() if diff_path == "-" else Path(diff_path).read_text(encoding="utf-8")
     context_text = load_context_file(context_path)
@@ -355,6 +358,7 @@ async def run_scan(
         triage_concurrency      = triage_concurrency,
         max_low_per_perspective = max_low_per_perspective,
         context_text            = context_text,
+        debate_rounds           = debate_rounds,
     )
 
     if ctx.total_perspectives == 0:
@@ -399,6 +403,11 @@ def build_argparser() -> argparse.ArgumentParser:
     parser.add_argument("--max-low-per-perspective", type=int, default=3,
                         help="cap of Low-severity findings to triage per perspective "
                              "(default: 3; rest stay status=raw)")
+    parser.add_argument("--debate-rounds", type=int, default=1, choices=(1, 2),
+                        help="number of debate rounds in triage. 1 (default) = "
+                             "Attacker/Defender/Judge once. 2 = run an extra "
+                             "Attacker_rebut/Defender_rebut/Judge round on findings "
+                             "that come back inconclusive.")
     return parser
 
 
@@ -412,6 +421,7 @@ def main() -> None:
         triage_concurrency      = args.triage_concurrency,
         max_low_per_perspective = args.max_low_per_perspective,
         context_path            = args.context,
+        debate_rounds           = args.debate_rounds,
     ))
     sys.exit(code)
 

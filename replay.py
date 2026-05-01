@@ -129,6 +129,7 @@ async def replay_one(
     max_low_per_perspective: int,
     force:                   bool,
     context_text:            str = "",
+    debate_rounds:           int = 1,
 ) -> Path:
     out_path = out_dir / f"PR-{pr_number}.json"
     if out_path.exists() and not force:
@@ -147,6 +148,7 @@ async def replay_one(
         triage_concurrency      = triage_concurrency,
         max_low_per_perspective = max_low_per_perspective,
         context_text            = context_text,
+        debate_rounds           = debate_rounds,
     )
 
     payload = {
@@ -204,6 +206,7 @@ async def _amain(args: argparse.Namespace) -> int:
                 max_low_per_perspective = args.max_low_per_perspective,
                 force                   = args.force,
                 context_text            = context_text,
+                debate_rounds           = args.debate_rounds,
             )
         except subprocess.CalledProcessError as e:
             stderr = (e.stderr or "").strip()
@@ -241,6 +244,9 @@ def build_argparser() -> argparse.ArgumentParser:
                    help="max parallel triage jobs (default: 4)")
     p.add_argument("--max-low-per-perspective", type=int, default=3,
                    help="cap of Low-severity findings to triage per perspective (default: 3)")
+    p.add_argument("--debate-rounds", type=int, default=1, choices=(1, 2),
+                   help="1 (default) = standard triage. 2 = run an extra rebut "
+                        "round on findings that come back inconclusive.")
     p.add_argument("--force", action="store_true",
                    help="overwrite existing PR-<n>.json files")
     return p

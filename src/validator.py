@@ -33,6 +33,10 @@ class Finding:
     poc:              str = ""        # 最小再現コード / payload / curl
     poc_kind:         str = ""        # http_request | curl | code | payload | none
     triage_error:     str = ""        # triage 自体の失敗理由（fail-open 用）
+    # ── Step 4: multi-round debate (inconclusive のみ追加ラウンド) ───
+    attacker_arg_rebut: str = ""      # Round 2: 攻撃側の反論要約（空 = 追加ラウンド未実施）
+    defender_arg_rebut: str = ""      # Round 2: 防御側の再反証要約
+    triage_rounds:      int = 1       # 実際に走ったラウンド数（1 or 2）
 
 
 @dataclass
