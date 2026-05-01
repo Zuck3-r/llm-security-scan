@@ -87,17 +87,29 @@ class OpenAIProvider(LLMProvider, _RetryMixin):
             or self.DEFAULT_MODEL
         ).strip()
 
+    # GPT-5 / o-series reasoning models reject any non-default `temperature`
+    # (returns 400 "Unsupported value: 'temperature'"). Only pass it for
+    # models known to accept it.
+    @staticmethod
+    def _supports_temperature(model: str) -> bool:
+        m = model.lower()
+        if m.startswith(("gpt-5", "o1", "o3", "o4")):
+            return False
+        return True
+
     async def call(self, system_prompt: str, user_prompt: str) -> dict:
         async def _do() -> dict:
-            resp = await self._client.chat.completions.create(
-                model=self.model,
-                messages=[
+            kwargs: dict = {
+                "model": self.model,
+                "messages": [
                     {"role": "system", "content": system_prompt},
                     {"role": "user",   "content": user_prompt},
                 ],
-                temperature=0.1,
-                response_format={"type": "json_object"},
-            )
+                "response_format": {"type": "json_object"},
+            }
+            if self._supports_temperature(self.model):
+                kwargs["temperature"] = 0.1
+            resp = await self._client.chat.completions.create(**kwargs)
             choice = resp.choices[0] if resp.choices else None
             text = (getattr(getattr(choice, "message", None), "content", None) or "").strip()
             usage = resp.usage
