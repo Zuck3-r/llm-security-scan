@@ -74,7 +74,7 @@ class OpenAIProvider(LLMProvider, _RetryMixin):
     """Chat Completions API + JSON mode で叩く。"""
 
     name = "openai"
-    DEFAULT_MODEL = "gpt-4o-mini"
+    DEFAULT_MODEL = "gpt-5.5-pro"
 
     def __init__(self, api_key: str, model: Optional[str] = None) -> None:
         from openai import AsyncOpenAI
