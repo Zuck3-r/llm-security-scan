@@ -16,13 +16,14 @@ on:
     branches: [main]
 jobs:
   scan:
-    uses: Zuck3-r/llm-security-scan/.github/workflows/scan.yml@v0.2.0
+    uses: Zuck3-r/llm-security-scan/.github/workflows/scan.yml@v0.4.0
     with:
       overrides_path: ""                # プロジェクト固有の設定がある場合に指定
       perspectives_disabled: ""         # 無効にする観点 (e.g. "secrets,xss")
       # context_path: .github/security-scan-overrides/SECURITY-CONTEXT.md
       # scan_exclude_extensions: "md,markdown,..."   # default で十分なことが多い
       # scan_extra_excludes: ":(exclude)docs/** :(exclude)scripts/**"
+      # debate_rounds: 2                # inconclusive を救いたいなら 2 (Step 4 opt-in)
     secrets:
       OPENAI_API_KEY:  ${{ secrets.OPENAI_API_KEY }}
       GCP_SA_KEY:      ${{ secrets.GCP_SA_KEY }}
@@ -66,6 +67,24 @@ jobs:
 3. **Judge**: 両者を読み confirmed / dismissed / inconclusive + confidence (0.0–1.0) を判定
 
 `--no-triage` で省略可能（Phase 1 互換動作）。
+
+### Multi-round debate (Step 4, opt-in)
+
+Round 1 で `inconclusive` になった finding に対してだけ、もう 1 ラウンド (Attacker_rebut → Defender_rebut → Judge 再判定) を回して `confirmed` か `dismissed` に倒すことを試みる。
+
+- `with: debate_rounds: 2` で有効化 (default は `1` = 互換動作)
+- **`confirmed` / `dismissed` には適用しない** (コスト最適化)
+- 効果: Round 1 では片方の主張が弱くて判定不能だったケースが、相手の反論を踏まえた強い PoC v2 / 強い反証で確定できる
+- 救えないケースは Round 2 後も `inconclusive` のまま (fail-open: 人間の最終判定に残す)
+- コスト影響: inconclusive 1 件あたり LLM 呼び出し +3 回。inconclusive 比率 20% なら全体トークン約 +10%
+
+Round 2 の追加情報は finding に格納される:
+
+| フィールド | 内容 |
+|---|---|
+| `attacker_arg_rebut` | Round 2 で Attacker が出した反論 |
+| `defender_arg_rebut` | Round 2 で Defender が出した再反証 |
+| `triage_rounds` | 1 (Round 2 未実施) または 2 (Round 2 走った) |
 
 
 ## プロジェクト固有のカスタマイズ

@@ -68,27 +68,63 @@ def _fallback_prompts() -> dict:
                 '"reason": "日本語 1-2 sentences"}'
             ),
         },
+        # Step 4: rebut ロールの fallback（YAML が古くて attacker_rebut/defender_rebut
+        # を持っていない場合の保険）
+        "attacker_rebut": {
+            "system": (
+                "You are an offensive security researcher in round 2 of a debate. "
+                "Address the Defender's rebuttal and either produce a stronger PoC "
+                "or concede. Output strictly JSON only."
+            ),
+            "output_schema": (
+                'JSON: {"exploitable_after_rebut": bool, "argument": "日本語 1-3 sentences", '
+                '"poc_v2": "code or payload (\"\" if cannot bypass)", '
+                '"poc_kind": "http_request|curl|code|payload|none"}'
+            ),
+        },
+        "defender_rebut": {
+            "system": (
+                "You are a defensive code reviewer in round 2 of a debate. "
+                "Decide whether the Attacker's PoC v2 also fails against existing "
+                "safety mechanisms, or concede. Output strictly JSON only."
+            ),
+            "output_schema": (
+                'JSON: {"still_false_positive": bool, "argument": "日本語 1-3 sentences", '
+                '"safe_evidence": "code line (\"\" if conceding)"}'
+            ),
+        },
     }
 
 
+# rebut ロールは旧 YAML との互換のため optional 扱い。欠けていたら fallback で補完。
+_REBUT_ROLES = ("attacker_rebut", "defender_rebut")
+
+
 def _load_prompts() -> dict:
+    fallback = _fallback_prompts()
     try:
         if _PROMPTS_PATH.exists():
             with open(_PROMPTS_PATH, "r", encoding="utf-8") as f:
                 data = yaml.safe_load(f) or {}
-            # 必要キーが揃っているかバリデーション
+            # 必須ロール 3 つ
             for role in ("attacker", "defender", "judge"):
                 if not (data.get(role) or {}).get("system"):
                     raise ValueError(f"{role}.system missing in {_PROMPTS_PATH}")
                 if not (data.get(role) or {}).get("output_schema"):
                     raise ValueError(f"{role}.output_schema missing in {_PROMPTS_PATH}")
+            # rebut ロール (optional): 欠けていたら fallback で補う
+            for role in _REBUT_ROLES:
+                if not (data.get(role) or {}).get("system"):
+                    data[role] = fallback[role]
+                elif not (data.get(role) or {}).get("output_schema"):
+                    data[role]["output_schema"] = fallback[role]["output_schema"]
             return data
     except Exception as e:
         # 起動時のため stderr に警告のみ。実行は fallback で続行する。
         import sys
         print(f"[warn] triage_prompts.yml load failed, using fallback: {e}",
               file=sys.stderr)
-    return _fallback_prompts()
+    return fallback
 
 
 _PROMPTS = _load_prompts()
@@ -110,6 +146,12 @@ _JUDGE_SYSTEM    = _PROMPTS["judge"]["system"]
 _ATTACKER_OUTPUT_SCHEMA = _PROMPTS["attacker"]["output_schema"]
 _DEFENDER_OUTPUT_SCHEMA = _PROMPTS["defender"]["output_schema"]
 _JUDGE_OUTPUT_SCHEMA    = _PROMPTS["judge"]["output_schema"]
+
+# Step 4: multi-round debate role prompts
+_ATTACKER_REBUT_SYSTEM = _PROMPTS["attacker_rebut"]["system"]
+_DEFENDER_REBUT_SYSTEM = _PROMPTS["defender_rebut"]["system"]
+_ATTACKER_REBUT_OUTPUT_SCHEMA = _PROMPTS["attacker_rebut"]["output_schema"]
+_DEFENDER_REBUT_OUTPUT_SCHEMA = _PROMPTS["defender_rebut"]["output_schema"]
 
 # プロジェクト固有の文脈 (SECURITY-CONTEXT.md) を triage の各ロール system prompt
 # 末尾に注入する。engine._CONTEXT_HEADER と同じ wording を triage 用に少し調整。
@@ -208,24 +250,52 @@ async def _call_role(
     )
 
 
+def _apply_judge_to_finding(f: Finding, judge_data: dict) -> None:
+    """Judge の dict を Finding に反映する小さなヘルパ。Round 1 / 2 共通。"""
+    verdict = str(judge_data.get("verdict", "")).strip().lower()
+    reason  = str(judge_data.get("reason",  "")).strip()
+    try:
+        conf = float(judge_data.get("confidence", 0.0) or 0.0)
+    except (TypeError, ValueError):
+        conf = 0.0
+    conf = max(0.0, min(1.0, conf))
+    if verdict == "confirmed":
+        f.triage_status = "confirmed"
+    elif verdict == "dismissed":
+        f.triage_status = "dismissed"
+    else:
+        f.triage_status = "inconclusive"
+    f.triage_confidence = conf
+    f.triage_reason     = reason
+
+
 async def _triage_one(
-    provider, f: Finding, code_context: str, *, context_text: str = "",
+    provider, f: Finding, code_context: str,
+    *,
+    context_text:  str = "",
+    debate_rounds: int = 1,
 ) -> tuple[Finding, int, int]:
     """1 finding に対して Attacker / Defender / Judge を順に呼ぶ。
 
-    Attacker と Defender は並列、Judge はその結果を待ってから 1 回。
-    fail-open: いずれかが失敗しても finding は消さず inconclusive にする。
+    Round 1 は常に走る（Attacker と Defender は並列、Judge はその結果を待つ）。
+    `debate_rounds >= 2` かつ Round 1 の verdict が inconclusive のときだけ
+    Round 2 (Attacker_rebut + Defender_rebut + Judge 再判定) を走らせる。
+    confirmed / dismissed には追加ラウンドを当てない（コスト最適化）。
 
+    fail-open: いずれかが失敗しても finding は消さず inconclusive にする。
     `context_text` が非空なら全ロールの system prompt 末尾に注入される。
     """
     block = _build_finding_block(f, code_context)
     attacker_user = block + _ATTACKER_OUTPUT_SCHEMA
     defender_user = block + _DEFENDER_OUTPUT_SCHEMA
 
-    attacker_sys = _with_context(_ATTACKER_SYSTEM, context_text)
-    defender_sys = _with_context(_DEFENDER_SYSTEM, context_text)
-    judge_sys    = _with_context(_JUDGE_SYSTEM,    context_text)
+    attacker_sys       = _with_context(_ATTACKER_SYSTEM,       context_text)
+    defender_sys       = _with_context(_DEFENDER_SYSTEM,       context_text)
+    judge_sys          = _with_context(_JUDGE_SYSTEM,          context_text)
+    attacker_rebut_sys = _with_context(_ATTACKER_REBUT_SYSTEM, context_text)
+    defender_rebut_sys = _with_context(_DEFENDER_REBUT_SYSTEM, context_text)
 
+    # ── Round 1 ─────────────────────────────────────────────
     attacker_res, defender_res = await asyncio.gather(
         _call_role(provider, attacker_sys, attacker_user),
         _call_role(provider, defender_sys, defender_user),
@@ -243,7 +313,6 @@ async def _triage_one(
         f.triage_error  = f"attacker={attacker_res.error}; defender={defender_res.error}"
         return f, tokens_in, tokens_out
 
-    # 両者の主張を finding に格納（片方だけでも記録）
     if a_ok:
         f.attacker_arg = str(attacker_res.data.get("argument", "")).strip()
         if attacker_res.data.get("exploitable"):
@@ -252,7 +321,6 @@ async def _triage_one(
     if d_ok:
         f.defender_arg = str(defender_res.data.get("argument", "")).strip()
 
-    # Judge を呼ぶ
     judge_user = (
         block
         + "\n## Attacker の主張\n"
@@ -272,22 +340,83 @@ async def _triage_one(
         f.triage_error  = f"judge={judge_res.error}"
         return f, tokens_in, tokens_out
 
-    verdict = str(judge_res.data.get("verdict", "")).strip().lower()
-    reason  = str(judge_res.data.get("reason",  "")).strip()
-    # confidence は LLM の自己申告。0-1 にクランプ、欠落時は 0.0（未提供）
-    try:
-        conf = float(judge_res.data.get("confidence", 0.0) or 0.0)
-    except (TypeError, ValueError):
-        conf = 0.0
-    conf = max(0.0, min(1.0, conf))
-    if verdict == "confirmed":
-        f.triage_status = "confirmed"
-    elif verdict == "dismissed":
-        f.triage_status = "dismissed"
-    else:
-        f.triage_status = "inconclusive"
-    f.triage_confidence = conf
-    f.triage_reason = reason
+    _apply_judge_to_finding(f, judge_res.data)
+    f.triage_rounds = 1
+
+    # ── Round 2 (inconclusive のみ) ──────────────────────────
+    if debate_rounds < 2 or f.triage_status != "inconclusive":
+        return f, tokens_in, tokens_out
+
+    # Attacker_rebut: Defender の反証を踏まえて PoC を強化 or concede
+    rebut_block = (
+        block
+        + "\n## Round 1 で出た Attacker の主張\n"
+        + (f.attacker_arg or "(取得失敗)")
+        + ("\n初期 PoC:\n" + f.poc if f.poc else "")
+        + "\n\n## Round 1 で出た Defender の反証 (これに対応せよ)\n"
+        + (f.defender_arg or "(取得失敗)")
+        + "\n"
+    )
+    attacker_rebut_user = rebut_block + _ATTACKER_REBUT_OUTPUT_SCHEMA
+    attacker_rebut_res = await _call_role(provider, attacker_rebut_sys, attacker_rebut_user)
+    tokens_in  += attacker_rebut_res.tokens_in
+    tokens_out += attacker_rebut_res.tokens_out
+
+    if attacker_rebut_res.error or not attacker_rebut_res.data:
+        # Round 2 失敗 → Round 1 の inconclusive のまま据え置き (fail-open)
+        f.triage_error = (f.triage_error + "; " if f.triage_error else "") \
+                         + f"attacker_rebut={attacker_rebut_res.error}"
+        return f, tokens_in, tokens_out
+
+    f.attacker_arg_rebut = str(attacker_rebut_res.data.get("argument", "")).strip()
+    poc_v2 = str(attacker_rebut_res.data.get("poc_v2", "")).strip()
+    if attacker_rebut_res.data.get("exploitable_after_rebut") and poc_v2:
+        f.poc      = poc_v2
+        f.poc_kind = str(attacker_rebut_res.data.get("poc_kind", "none")).strip().lower()
+
+    # Defender_rebut: 強化された PoC v2 にも反証できるか
+    defender_rebut_block = (
+        rebut_block
+        + "\n## Attacker の Round 2 反論 (これに対応せよ)\n"
+        + (f.attacker_arg_rebut or "(取得失敗)")
+        + ("\nPoC v2:\n" + poc_v2 if poc_v2 else "")
+        + "\n"
+    )
+    defender_rebut_user = defender_rebut_block + _DEFENDER_REBUT_OUTPUT_SCHEMA
+    defender_rebut_res  = await _call_role(provider, defender_rebut_sys, defender_rebut_user)
+    tokens_in  += defender_rebut_res.tokens_in
+    tokens_out += defender_rebut_res.tokens_out
+
+    if defender_rebut_res.error or not defender_rebut_res.data:
+        f.triage_error = (f.triage_error + "; " if f.triage_error else "") \
+                         + f"defender_rebut={defender_rebut_res.error}"
+        return f, tokens_in, tokens_out
+
+    f.defender_arg_rebut = str(defender_rebut_res.data.get("argument", "")).strip()
+
+    # Judge 再判定: Round 1+2 全部の主張を提示
+    judge_user_v2 = (
+        block
+        + "\n## Attacker の主張 (Round 1)\n" + (f.attacker_arg or "(取得失敗)")
+        + ("\nPoC:\n" + f.poc if f.poc else "")
+        + "\n\n## Defender の反証 (Round 1)\n" + (f.defender_arg or "(取得失敗)")
+        + "\n\n## Attacker の反論 (Round 2)\n" + (f.attacker_arg_rebut or "(取得失敗)")
+        + "\n\n## Defender の再反証 (Round 2)\n" + (f.defender_arg_rebut or "(取得失敗)")
+        + "\n\n注: Round 2 を踏まえて再判定すること。Round 1 の判定に縛られなくてよい。\n"
+        + _JUDGE_OUTPUT_SCHEMA
+    )
+    judge_v2_res = await _call_role(provider, judge_sys, judge_user_v2)
+    tokens_in  += judge_v2_res.tokens_in
+    tokens_out += judge_v2_res.tokens_out
+
+    if judge_v2_res.error or not judge_v2_res.data:
+        # Round 2 の Judge が失敗 → Round 1 の判定を維持 (inconclusive)
+        f.triage_error = (f.triage_error + "; " if f.triage_error else "") \
+                         + f"judge_v2={judge_v2_res.error}"
+        return f, tokens_in, tokens_out
+
+    _apply_judge_to_finding(f, judge_v2_res.data)
+    f.triage_rounds = 2
     return f, tokens_in, tokens_out
 
 
@@ -333,13 +462,17 @@ def _code_context_for(
 # ── 公開エントリ ───────────────────────────────────────────────
 @dataclass
 class TriageStats:
-    triaged:      int = 0
-    confirmed:    int = 0
-    dismissed:    int = 0
-    inconclusive: int = 0
-    skipped_low:  int = 0
-    tokens_in:    int = 0
-    tokens_out:   int = 0
+    triaged:        int = 0
+    confirmed:      int = 0
+    dismissed:      int = 0
+    inconclusive:   int = 0
+    skipped_low:    int = 0
+    tokens_in:      int = 0
+    tokens_out:     int = 0
+    # Step 4: multi-round 統計 (debate_rounds=2 のときのみ非ゼロ)
+    rebutted:       int = 0   # Round 2 を実際に走らせた件数
+    flipped_to_confirmed: int = 0   # Round 1 inconclusive → Round 2 で confirmed に倒れた
+    flipped_to_dismissed: int = 0   # Round 1 inconclusive → Round 2 で dismissed に倒れた
 
 
 async def triage_findings(
@@ -350,6 +483,7 @@ async def triage_findings(
     max_low_per_perspective: int = DEFAULT_MAX_LOW_PER_PERSPECTIVE,
     concurrency: int = 4,
     context_text: str = "",
+    debate_rounds: int = 1,
 ) -> tuple[list[Finding], TriageStats]:
     """全 finding を triage する。並列度は `concurrency` で制限。
 
@@ -358,6 +492,9 @@ async def triage_findings(
 
     `context_text` は SECURITY-CONTEXT.md の中身。各ロールの system prompt
     末尾に注入される。空なら何もしない。
+    `debate_rounds=2` で Step 4 の multi-round debate を有効化（Round 1 で
+    Judge が inconclusive を出した finding のみ追加ラウンドを回す）。
+    default は 1（現状互換）。
     """
     stats = TriageStats()
     if not findings:
@@ -373,7 +510,11 @@ async def triage_findings(
     async def _bounded(f: Finding) -> tuple[Finding, int, int]:
         async with sem:
             ctx = _code_context_for(f, diff_added_lines_by_file)
-            return await _triage_one(provider, f, ctx, context_text=context_text)
+            return await _triage_one(
+                provider, f, ctx,
+                context_text=context_text,
+                debate_rounds=debate_rounds,
+            )
 
     results = await asyncio.gather(*[_bounded(f) for f in queued])
 
@@ -387,5 +528,12 @@ async def triage_findings(
             stats.dismissed += 1
         else:
             stats.inconclusive += 1
+        # multi-round 統計: triage_rounds=2 → Round 2 を走らせた
+        if f.triage_rounds >= 2:
+            stats.rebutted += 1
+            if f.triage_status == "confirmed":
+                stats.flipped_to_confirmed += 1
+            elif f.triage_status == "dismissed":
+                stats.flipped_to_dismissed += 1
 
     return findings, stats

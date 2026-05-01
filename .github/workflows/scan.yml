@@ -49,7 +49,11 @@ on:
         type: boolean
         default: true
       debate_rounds:
-        description: "Multi-round debate のラウンド数 (Step 4 用に予約; 現状未使用)"
+        description: |
+          弁証法的トリアージのラウンド数。1 (default) = Attacker/Defender/Judge
+          を 1 回。2 = Round 1 の verdict が inconclusive の finding にだけ
+          Attacker_rebut/Defender_rebut/Judge を追加で 1 ラウンド回す。
+          confirmed/dismissed には適用しない (コスト最適化)。
         type: number
         default: 1
     secrets:
@@ -258,6 +262,7 @@ jobs:
           LLM_MODEL:             ${{ vars.LLM_MODEL || 'gpt-4o-mini' }}
           TRIAGE_ENABLED:        ${{ inputs.triage_enabled }}
           MAX_LOW:               ${{ inputs.max_low_per_perspective }}
+          DEBATE_ROUNDS:         ${{ inputs.debate_rounds }}
         run: |
           ARGS=()
           if [ "$TRIAGE_ENABLED" != "true" ]; then ARGS+=(--no-triage); fi
@@ -267,6 +272,7 @@ jobs:
             --perspectives-dir /tmp/scan/perspectives \
             --context /tmp/scan/context.md \
             --max-low-per-perspective "$MAX_LOW" \
+            --debate-rounds "$DEBATE_ROUNDS" \
             "${ARGS[@]}"
           echo "── report ──────────────────────────────────────"
           cat /tmp/scan/report.md

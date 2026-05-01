@@ -32,6 +32,10 @@ on:
         description: "Low severity の triage 上限"
         type: number
         default: 3
+      debate_rounds:
+        description: "1 = 通常。2 = inconclusive のみ追加 1 ラウンド"
+        type: number
+        default: 1
       context_path:
         description: "SECURITY-CONTEXT markdown へのパス (このリポ内)。空なら ./SECURITY-CONTEXT.md を fallback で見る。"
         type: string
@@ -105,9 +109,10 @@ jobs:
           REPO:                  ${{ inputs.repo }}
           NO_TRIAGE:             ${{ inputs.no_triage }}
           MAX_LOW:               ${{ inputs.max_low_per_perspective }}
+          DEBATE_ROUNDS:         ${{ inputs.debate_rounds }}
           CONTEXT_PATH:          ${{ inputs.context_path }}
         run: |
-          ARGS=(--max-low-per-perspective "$MAX_LOW")
+          ARGS=(--max-low-per-perspective "$MAX_LOW" --debate-rounds "$DEBATE_ROUNDS")
           [ -n "$PR" ]    && ARGS+=(--pr "$PR")
           [ -n "$RANGE" ] && ARGS+=(--pr-range "$RANGE")
           [ -n "$REPO" ]  && ARGS+=(--repo "$REPO")

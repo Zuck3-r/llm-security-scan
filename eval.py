@@ -135,6 +135,7 @@ async def run_case(
     retry:            bool,
     context_text:     str   = "",
     verbose:          bool  = False,
+    debate_rounds:    int   = 1,
 ) -> CaseResult:
     diff_text = diff_path.read_text(encoding="utf-8")
     expected_summary = f"{exp.verdict}/{exp.perspective}"
@@ -153,6 +154,7 @@ async def run_case(
                 perspectives_dir,
                 enable_triage = True,
                 context_text  = context_text,
+                debate_rounds = debate_rounds,
             )
         except Exception as e:
             return CaseResult(
@@ -270,9 +272,10 @@ async def _amain(args: argparse.Namespace) -> int:
             continue
         results.append(await run_case(
             exp, diff_path, perspectives_dir,
-            retry        = not args.no_retry,
-            context_text = context_text,
-            verbose      = args.verbose,
+            retry         = not args.no_retry,
+            context_text  = context_text,
+            verbose       = args.verbose,
+            debate_rounds = args.debate_rounds,
         ))
 
     _print_report(results)
@@ -294,6 +297,9 @@ def build_argparser() -> argparse.ArgumentParser:
                    help="path to SECURITY-CONTEXT.md (optional)")
     p.add_argument("--no-retry", action="store_true",
                    help="disable retry (1 attempt only; useful for debugging)")
+    p.add_argument("--debate-rounds", type=int, default=1, choices=(1, 2),
+                   help="1 (default) = standard triage. 2 = run an extra rebut "
+                        "round on findings that come back inconclusive.")
     p.add_argument("--verbose", action="store_true",
                    help="show per-attempt logs to stderr")
     return p
