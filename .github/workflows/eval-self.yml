@@ -1,0 +1,60 @@
+name: Eval (self)
+
+# このリポ自身の eval ケース (evals/cases/, evals/expected.yml) に対して
+# eval.py を直接走らせる。利用者向けの reusable eval.yml とは別ジョブで、
+# プロンプトや perspectives の改変で自己 baseline が degrade した時に
+# 本リポへの PR / main push をブロックする。
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  eval:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Detect provider
+        id: detect
+        env:
+          HAS_OPENAI: ${{ secrets.OPENAI_API_KEY != '' }}
+          HAS_GCP_SA: ${{ secrets.GCP_SA_KEY     != '' }}
+          HAS_GEMINI: ${{ secrets.GEMINI_API_KEY != '' }}
+        run: |
+          if   [ "$HAS_OPENAI" = "true" ]; then echo "provider=openai" >> "$GITHUB_OUTPUT"
+          elif [ "$HAS_GCP_SA" = "true" ]; then echo "provider=vertex" >> "$GITHUB_OUTPUT"
+          elif [ "$HAS_GEMINI" = "true" ]; then echo "provider=gemini" >> "$GITHUB_OUTPUT"
+          else
+            echo "provider=none" >> "$GITHUB_OUTPUT"
+            echo "::error::No LLM provider credential available (OPENAI_API_KEY / GCP_SA_KEY / GEMINI_API_KEY)"
+            exit 1
+          fi
+
+      - name: Authenticate to GCP (Vertex AI)
+        if: steps.detect.outputs.provider == 'vertex'
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Install dependencies
+        run: pip install --quiet -r requirements.txt
+
+      - name: Run self eval
+        env:
+          LLM_PROVIDER:          ${{ steps.detect.outputs.provider }}
+          OPENAI_API_KEY:        ${{ secrets.OPENAI_API_KEY }}
+          GOOGLE_CLOUD_PROJECT:  ${{ vars.GCP_PROJECT  || 'CHANGE_ME' }}
+          GOOGLE_CLOUD_LOCATION: ${{ vars.GCP_LOCATION || 'us-central1' }}
+          GEMINI_API_KEY:        ${{ secrets.GEMINI_API_KEY }}
+          LLM_MODEL:             ${{ vars.LLM_MODEL || 'gpt-4o-mini' }}
+        run: python3 eval.py --verbose
