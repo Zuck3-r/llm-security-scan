@@ -1,19 +1,69 @@
-name: Eval
+name: LLM Security Eval
 
-# eval ハーネス (CLAUDE.md §9 Step 2)。
-# evals/cases/*.diff を engine.scan_diff に流して evals/expected.yml と
-# 突合し、不一致があれば exit 1 でマージをブロックする。
-# LLM 起因の散発エラーを吸収するため eval.py 内で 1 回だけ retry する
-# (Run1 fail → Run2 pass なら PASS_RETRY、2 連続 fail なら本物の degrade)。
+# 利用者向け eval ハーネス (workflow_call)。
 #
-# トリガー: PR と main への push の両方で必須。API キーが secrets に
-# 設定されていることが前提。
+# プロジェクト固有の eval ケースに対して、汎用エンジン (engine.scan_diff) が
+# 期待した verdict を返すかを CI で担保する。プロンプト編集や perspective
+# 追加で過去に正しく判定できていたケースが degrade した時に PR をブロックする。
+#
+# 設計方針 (CLAUDE.md §9 Step 2 / 利用者運用フェーズ):
+#   - cases / expected.yml は caller repo に置く (= プロジェクト固有)
+#   - perspectives / triage_prompts は本リポ + caller の overrides をマージ
+#   - SECURITY-CONTEXT は scan.yml と同じパスを渡す前提
+#
+# scan.yml と「同じ overrides 構成」を渡すのが推奨。eval が通る = 本番 scan も
+# 同じ判定をする、という保証になる。
 
 on:
-  pull_request:
-    branches: [main]
-  push:
-    branches: [main]
+  workflow_call:
+    inputs:
+      # ── eval 固有 ─────────────────────────────────────────
+      cases_dir:
+        description: |
+          caller repo 内の eval cases ディレクトリ。中身は <id>.diff の集合。
+          見つからなければ eval をスキップする (初期導入時のため)。
+        type: string
+        default: ".github/security-scan-overrides/cases"
+      expected:
+        description: |
+          caller repo 内の expected.yml パス。CLAUDE.md §9 Step 2 のスキーマ。
+          ファイルが無ければ eval をスキップする。
+        type: string
+        default: ".github/security-scan-overrides/expected.yml"
+      no_retry:
+        description: "eval の retry を無効化 (デバッグ用; LLM ブレ吸収を切る)"
+        type: boolean
+        default: false
+
+      # ── scan.yml と同じ構成を渡すことを推奨 ───────────────
+      overrides_path:
+        description: "scan.yml と同じ overrides_path (perspectives / triage_prompts 上書き)"
+        type: string
+        default: ""
+      perspectives_disabled:
+        description: "scan.yml と同じ perspectives_disabled (CSV)"
+        type: string
+        default: ""
+      context_path:
+        description: "scan.yml と同じ context_path (SECURITY-CONTEXT.md)"
+        type: string
+        default: ""
+      debate_rounds:
+        description: "scan.yml と同じ debate_rounds (1 or 2)"
+        type: number
+        default: 1
+      max_low_per_perspective:
+        description: "scan.yml と同じ max_low_per_perspective"
+        type: number
+        default: 3
+
+    secrets:
+      OPENAI_API_KEY:
+        required: false
+      GCP_SA_KEY:
+        required: false
+      GEMINI_API_KEY:
+        required: false
 
 permissions:
   contents: read
@@ -22,15 +72,89 @@ jobs:
   eval:
     runs-on: ubuntu-latest
     steps:
+      # 1) caller のリポジトリ
       - uses: actions/checkout@v4
+
+      # 2) このツール自身を同じ ref で .llm-security-scan/ にチェックアウト
+      - name: Resolve workflow ref
+        id: tool_ref
+        run: |
+          REF="${{ github.workflow_ref }}"
+          # github.workflow_ref = "owner/repo/.github/workflows/eval.yml@<ref>"
+          echo "ref=${REF##*@}" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v4
+        with:
+          repository: Zuck3-r/llm-security-scan
+          ref:        ${{ steps.tool_ref.outputs.ref }}
+          path:       .llm-security-scan
 
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
 
-      # provider 検出 (scan.yml / replay.yml と同ロジック)
+      # 3) cases / expected の存在チェック (なければ skip)
+      - name: Check eval files
+        id: check
+        env:
+          CASES:    ${{ inputs.cases_dir }}
+          EXPECTED: ${{ inputs.expected }}
+        run: |
+          if [ ! -f "$EXPECTED" ]; then
+            echo "::warning::Eval expected file not found: $EXPECTED. Skipping eval."
+            echo "::notice::To enable eval for this repo, create $EXPECTED with case definitions and place .diff files under $CASES/. See https://github.com/Zuck3-r/llm-security-scan/blob/main/docs/CONSUMER_SETUP.md"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          elif [ ! -d "$CASES" ]; then
+            echo "::warning::Eval cases dir not found: $CASES. Skipping eval."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # 4) overrides マージ (scan.yml と同じロジック)
+      - name: Merge overrides
+        if: steps.check.outputs.skip == 'false'
+        env:
+          OVERRIDES:    ${{ inputs.overrides_path }}
+          DISABLED:     ${{ inputs.perspectives_disabled }}
+          CONTEXT_PATH: ${{ inputs.context_path }}
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/eval/perspectives
+          cp .llm-security-scan/perspectives/*.yml /tmp/eval/perspectives/
+          cp .llm-security-scan/triage_prompts.yml /tmp/eval/triage_prompts.yml
+          if [ -n "$OVERRIDES" ] && [ -d "$OVERRIDES/perspectives" ]; then
+            cp "$OVERRIDES"/perspectives/*.yml /tmp/eval/perspectives/ 2>/dev/null || true
+          fi
+          if [ -n "$OVERRIDES" ] && [ -f "$OVERRIDES/triage_prompts.yml" ]; then
+            cp "$OVERRIDES/triage_prompts.yml" /tmp/eval/triage_prompts.yml
+          fi
+          if [ -n "$DISABLED" ]; then
+            IFS=',' read -ra IDS <<< "$DISABLED"
+            for id in "${IDS[@]}"; do
+              id="$(echo "$id" | xargs)"
+              [ -z "$id" ] && continue
+              f="/tmp/eval/perspectives/${id}.yml"
+              [ -f "$f" ] && sed -i 's/^enabled:.*$/enabled: false/' "$f"
+            done
+          fi
+          # triage.py が src/ の親に triage_prompts.yml を見にいくので反映
+          cp /tmp/eval/triage_prompts.yml .llm-security-scan/triage_prompts.yml
+
+          # SECURITY-CONTEXT の解決 (scan.yml と同じ優先順)
+          : > /tmp/eval/context.md
+          if [ -n "$CONTEXT_PATH" ] && [ -f "$CONTEXT_PATH" ]; then
+            cp "$CONTEXT_PATH" /tmp/eval/context.md
+            echo "[context] using $CONTEXT_PATH"
+          elif [ -n "$OVERRIDES" ] && [ -f "$OVERRIDES/SECURITY-CONTEXT.md" ]; then
+            cp "$OVERRIDES/SECURITY-CONTEXT.md" /tmp/eval/context.md
+            echo "[context] using $OVERRIDES/SECURITY-CONTEXT.md"
+          fi
+
+      # 5) provider 検出 (scan.yml / replay.yml と同ロジック)
       - name: Detect provider
         id: detect
+        if: steps.check.outputs.skip == 'false'
         env:
           HAS_OPENAI: ${{ secrets.OPENAI_API_KEY != '' }}
           HAS_GCP_SA: ${{ secrets.GCP_SA_KEY     != '' }}
@@ -46,15 +170,18 @@ jobs:
           fi
 
       - name: Authenticate to GCP (Vertex AI)
-        if: steps.detect.outputs.provider == 'vertex'
+        if: steps.check.outputs.skip == 'false' && steps.detect.outputs.provider == 'vertex'
         uses: google-github-actions/auth@v2
         with:
           credentials_json: ${{ secrets.GCP_SA_KEY }}
 
       - name: Install dependencies
-        run: pip install --quiet -r requirements.txt
+        if: steps.check.outputs.skip == 'false'
+        run: pip install --quiet -r .llm-security-scan/requirements.txt
 
+      # 6) eval 実行
       - name: Run eval
+        if: steps.check.outputs.skip == 'false'
         env:
           LLM_PROVIDER:          ${{ steps.detect.outputs.provider }}
           OPENAI_API_KEY:        ${{ secrets.OPENAI_API_KEY }}
@@ -62,4 +189,18 @@ jobs:
           GOOGLE_CLOUD_LOCATION: ${{ vars.GCP_LOCATION || 'us-central1' }}
           GEMINI_API_KEY:        ${{ secrets.GEMINI_API_KEY }}
           LLM_MODEL:             ${{ vars.LLM_MODEL || 'gpt-4o-mini' }}
-        run: python3 eval.py --verbose
+          CASES_DIR:             ${{ inputs.cases_dir }}
+          EXPECTED:              ${{ inputs.expected }}
+          NO_RETRY:              ${{ inputs.no_retry }}
+          DEBATE_ROUNDS:         ${{ inputs.debate_rounds }}
+        run: |
+          ARGS=(
+            --cases-dir       "$CASES_DIR"
+            --expected        "$EXPECTED"
+            --perspectives-dir /tmp/eval/perspectives
+            --context         /tmp/eval/context.md
+            --debate-rounds   "$DEBATE_ROUNDS"
+            --verbose
+          )
+          [ "$NO_RETRY" = "true" ] && ARGS+=(--no-retry)
+          python3 .llm-security-scan/eval.py "${ARGS[@]}"
