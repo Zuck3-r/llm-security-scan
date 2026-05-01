@@ -1,0 +1,16 @@
+diff --git a/api/users.py b/api/users.py
+index e69de29..a3b4c5d 100644
+--- a/api/users.py
++++ b/api/users.py
+@@ -1,8 +1,14 @@
+ from flask import Blueprint, request, jsonify
+ from app.db import db
+
+ bp = Blueprint("users", __name__)
+
++# 認証 decorator を付け忘れた状態変更エンドポイント。
++# 誰でも /api/users/<id> に DELETE すれば任意ユーザを削除できる。
++@bp.route("/api/users/<int:user_id>", methods=["DELETE"])
++def delete_user(user_id: int):
++    db.execute("DELETE FROM users WHERE id = %s", (user_id,))
++    return jsonify({"ok": True})

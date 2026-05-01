@@ -1,0 +1,16 @@
+diff --git a/app/controllers/posts_controller.rb b/app/controllers/posts_controller.rb
+index e69de29..a3b4c5d 100644
+--- a/app/controllers/posts_controller.rb
++++ b/app/controllers/posts_controller.rb
+@@ -1,8 +1,15 @@
+ class PostsController < ApplicationController
+   before_action :authenticate_user!
+
++  # path から受け取った :id をそのまま Post.find に渡している。
++  # 所有チェックが無いため、他ユーザの post_id を渡せば任意の下書きを
++  # 読み出せる (IDOR / BOLA)。
++  def show
++    @post = Post.find(params[:id])
++    render json: @post.as_json
++  end
+ end

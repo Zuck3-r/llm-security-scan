@@ -1,0 +1,18 @@
+diff --git a/app/controllers/payments_controller.rb b/app/controllers/payments_controller.rb
+index e69de29..a3b4c5d 100644
+--- a/app/controllers/payments_controller.rb
++++ b/app/controllers/payments_controller.rb
+@@ -1,9 +1,16 @@
+ class PaymentsController < ApplicationController
+   before_action :authenticate_user!
+
++  # CSRF 防御を解除している (理由のコメントなし)。
++  # cookie 認証 + form POST のため、攻撃者サイトから外部 origin 起点で
++  # /payments/transfer に POST されると意図しない送金が成立する。
++  skip_before_action :verify_authenticity_token, only: [:transfer]
++
++  def transfer
++    Payment.create!(user: current_user, amount: params[:amount], to: params[:to_account])
++    redirect_to payments_path, notice: "送金しました"
++  end
+ end

@@ -1,0 +1,70 @@
+id: authz_vertical
+name: 権限昇格 (縦 / Vertical privilege escalation)
+enabled: true
+severity_weight: Critical
+
+# 縦の権限昇格 = 一般ユーザが admin / 上位 role の機能を不正に呼べる、
+# あるいは自身の role / permission を書き換えられる経路を扱う。
+# 同じ role 同士の他人リソースアクセスは authz_horizontal の責務。
+# 認証そのものの欠落は authn の責務。
+#
+# プロジェクト固有の admin ガード命名は overrides_path で追加すること。
+code_safe_patterns:
+  - "@admin_required|requires_admin|require_admin"   # 一般的な admin decorator
+  - "hasRole\\(\\s*['\"]admin"                         # role guard 一般
+  - "is_admin\\s*[\\?\\(]"                             # is_admin? / is_admin(
+  - "current_user\\.admin\\?"                          # Rails 慣用
+  - "permit\\(.*\\)"                                    # Rails Strong Parameters
+  - "exclude\\s*=\\s*\\{[^}]*['\"]?role"                # Pydantic model_dump(exclude={"role"})
+  - "attr_accessible"                                   # Rails (legacy) 明示許可
+
+prompt:
+  detect_patterns: |
+    1. admin / 上位 role 専用機能のガード欠落
+       - admin 専用 API / 管理画面 endpoint で role チェックが無い
+       - 「画面側で隠してる」だけで API は素通り (forced browsing 可)
+       - admin 判定が "X-Admin: true" 等のクライアント送信ヘッダ依存
+       - admin 判定が JWT の payload を verify せず読んでいる
+    2. role / permission の自己書き換え (privilege escalation by mass-assignment)
+       - PATCH /users/me の body に role / is_admin / permissions を含めて送れば
+         自身を昇格できる
+       - Strong Parameters / allow-list を経由せず request.body をそのまま update
+       - mass-assignment 防御 (Pydantic exclude / Strong Params) が無いまま
+         user モデルを update
+    3. 危険な操作の自己保護欠落
+       - 最後の admin を削除 / 自身を降格してシステムが詰む
+       - admin 自身が自分の admin 権限を奪う経路に対する明示的な拒否が無い
+    4. role チェックロジックの脆弱性
+       - role 比較が文字列 contains / startsWith で `"administrator"` も
+         `"non-administrator"` を通してしまう
+       - role が複数あるとき any/all を取り違えている
+       - role 階層が DB 側で定義されているが API 側で展開していない
+
+  safe_patterns: |
+    以下は検出しない (誤検知を避ける):
+    - サーバ側で current_user.role / current_user.admin? / hasRole('admin') 等を
+      明示的に評価している
+    - @admin_required / requires_admin 等の decorator / middleware で保護
+    - mass-assignment 防御: Rails Strong Parameters (params.permit), Pydantic の
+      exclude / Field(..., frozen=True), Sequelize fields whitelist 等
+    - 自己昇格防止チェック (updated.role != requestor.role を拒否) が実装されている
+    - 最後の admin 保護 (削除 / 降格時の admin count チェック) が実装されている
+    ※「他人のリソースを操作している」かどうかは authz_horizontal の責務。本観点は
+      role / 権限のレベルが上がる方向の不正のみを扱う。
+
+  output_schema: |
+    以下のJSON形式で出力してください。findings が空なら問題なしです。
+    JSONのみを出力し、コードフェンス（```）や説明文を付けないでください。
+    {
+      "findings": [
+        {
+          "file": "ファイルパス（diffヘッダーから取得）",
+          "line": "行番号または該当箇所の説明",
+          "severity": "Critical|High|Medium|Low",
+          "title": "問題の簡潔なタイトル",
+          "detail": "何が問題で、どう攻撃されうるか",
+          "fix": "具体的な修正案"
+        }
+      ],
+      "summary": "この観点での全体的な評価（1-2文）"
+    }

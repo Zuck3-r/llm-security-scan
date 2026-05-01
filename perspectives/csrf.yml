@@ -1,0 +1,65 @@
+id: csrf
+name: CSRF (Cross-Site Request Forgery)
+enabled: true
+severity_weight: High
+
+# CSRF (クロスサイトリクエストフォージェリ) 専用観点。
+# 認証は通っているが「ユーザの意図しない第三者起点リクエスト」を扱う。
+# 認証そのものの欠落は authn 観点の責務。
+#
+# プロジェクト固有の CSRF middleware / token 命名は overrides_path で追加すること。
+code_safe_patterns:
+  - "csrf_token|csrfToken|CSRF_TOKEN"           # 一般的な token 命名
+  - "CSRFProtect|csrf_protect"                  # Flask-WTF / Django CSRF
+  - "csurf"                                     # Express csurf middleware
+  - "protect_from_forgery"                      # Rails default
+  - "X-CSRF-Token|X-XSRF-Token"                 # double-submit / SPA 慣用
+  - "SameSite\\s*=\\s*(Strict|Lax)"             # SameSite cookie 属性
+  - "@csrf_protect"                             # Django の view-level decorator
+
+prompt:
+  detect_patterns: |
+    1. 状態変更エンドポイントで CSRF トークン未検証
+       - POST / PUT / PATCH / DELETE で CSRF token / synchronizer token を検証していない
+       - Cookie 認証 + form 送信なのに token 検証が無い
+    2. CSRF 防御の意図的な解除
+       - Django の @csrf_exempt を理由なし (or 不適切) に付与
+       - Rails の skip_before_action :verify_authenticity_token を本番経路で使用
+       - Express で csurf middleware を特定 route のみ外している (理由不明)
+    3. SameSite cookie 設定の不備
+       - SameSite=None で Secure 不在 → ブラウザに拒否されるか CSRF に脆弱
+       - 認証 cookie で SameSite 属性が一切指定されていない
+    4. ヘッダ依存のみの脆弱な防御
+       - X-Requested-With ヘッダのみで防御 (古い慣行、preflight 制約緩和で破られる)
+       - Origin / Referer 検証のみで token なし (空 Referer や spoof で破られうる)
+    5. GET で副作用のあるエンドポイント
+       - GET でデータ削除・状態変更を行っている (CSRF 経路を image タグ等に拡張する)
+    6. JSON エンドポイントでの油断
+       - "JSON だから安全" を理由に CSRF 防御を省いているが、Content-Type 制約が
+         middleware 側で enforce されていない (text/plain で受けてしまう等)
+
+  safe_patterns: |
+    以下は検出しない (誤検知を避ける):
+    - Django CSRFProtect / Flask-WTF CSRFProtect / Rails protect_from_forgery /
+      Express csurf 等の標準 middleware が attached で、当該 route が exempt されていない
+    - SameSite=Strict または SameSite=Lax + Secure cookie が設定されている
+    - Double-Submit Cookie パターン (cookie と header / form value の一致確認)
+    - JWT の Bearer 認証のみで cookie を一切使わない API (CSRF 不要)
+    - GitHub OAuth callback 等、state パラメータで origin を縛っているフロー
+
+  output_schema: |
+    以下のJSON形式で出力してください。findings が空なら問題なしです。
+    JSONのみを出力し、コードフェンス（```）や説明文を付けないでください。
+    {
+      "findings": [
+        {
+          "file": "ファイルパス（diffヘッダーから取得）",
+          "line": "行番号または該当箇所の説明",
+          "severity": "Critical|High|Medium|Low",
+          "title": "問題の簡潔なタイトル",
+          "detail": "何が問題で、どう攻撃されうるか",
+          "fix": "具体的な修正案"
+        }
+      ],
+      "summary": "この観点での全体的な評価（1-2文）"
+    }

@@ -1,0 +1,72 @@
+id: authn
+name: 認証 (未認証アクセス・JWT 検証)
+enabled: true
+severity_weight: Critical
+
+# 認証 (Authentication) 専用観点。
+# 「認証必須エンドポイントが guard 抜け」「JWT/session 検証の欠落」を扱う。
+# 認可 (Authorization) は authz_vertical / authz_horizontal、CSRF は csrf 観点で扱う。
+#
+# プロジェクト固有の認証 decorator / middleware 名は overrides_path で追加すること。
+code_safe_patterns:
+  - "@login_required"                       # Django / Flask 慣用
+  - "@authenticated"                        # 各種 FW
+  - "@authorize"                            # ASP.NET / Spring 等 (auth ガードとして頻用)
+  - "isAuthenticated"                       # JS / TS 慣用
+  - "before_action\\s*:authenticate"        # Rails before_action :authenticate_user!
+  - "ensure_authenticated"                  # 一般的な命名
+  - "requireAuth\\(|require_auth\\("        # 一般的な命名
+  - "passport\\.authenticate\\("            # Express + Passport
+  - "jwt\\.decode\\([^)]*verify"            # PyJWT 等で verify=True 経路
+  - "jwt\\.verify\\("                       # jsonwebtoken (Node) の verify
+  - "jose\\.jwt\\.decode"                   # python-jose
+
+prompt:
+  detect_patterns: |
+    1. 未認証アクセス / 認証バイパス
+       - 認証必須エンドポイントから guard / middleware / decorator が抜けている
+       - middleware 層の検証ロジックを迂回する条件分岐
+       - 環境変数フラグ 1 つで認証を無効化できる経路 (fail-open になっていないか)
+       - public ルートに混入させて意図せず認証を外していないか
+       - 「内部 API だから」を理由に認証を省いているが実際は外部から到達可能な経路
+    2. session / cookie の検証欠落
+       - session ID の signature / HMAC を検証していない
+       - cookie の signed flag が無く改ざん可能
+       - session fixation 対策 (login 時の regenerate) なし
+    3. JWT / トークン検証の欠落・過信
+       - JWT の payload だけ見て signature を検証していない
+       - 期限切れトークンを通している (exp / nbf 未検証)
+       - email_verified / aud / iss / sub 等の必須 claim を見ていない
+       - alg=none を許容している、または HS256/RS256 を取り違える経路
+       - secret / JWK のローテーションに対応していない
+    4. 多要素 / step-up 認証の抜け
+       - 機微操作 (パスワード変更, 振込等) で再認証 / MFA を要求していない
+
+  safe_patterns: |
+    以下は検出しない (誤検知を避ける):
+    - guard / decorator / middleware (login_required, authenticated, authorize,
+      before_action :authenticate_user! 等) で保護済みのエンドポイント
+    - 信頼できる JWT/ID トークン検証ライブラリ (PyJWT / jose / jsonwebtoken 等) を
+      verify=True 相当で経由している
+    - signed cookie / signed session を使い framework 側で改ざん検出している
+    - public エンドポイント (公開 API / health check / login 自体 等) で認証不要が
+      意図的に明記されているもの
+    ※認可 (admin チェック / 所有チェック) は本観点ではなく authz_vertical /
+      authz_horizontal の責務。本観点では「認証されているかどうか」のみを判定する。
+
+  output_schema: |
+    以下のJSON形式で出力してください。findings が空なら問題なしです。
+    JSONのみを出力し、コードフェンス（```）や説明文を付けないでください。
+    {
+      "findings": [
+        {
+          "file": "ファイルパス（diffヘッダーから取得）",
+          "line": "行番号または該当箇所の説明",
+          "severity": "Critical|High|Medium|Low",
+          "title": "問題の簡潔なタイトル",
+          "detail": "何が問題で、どう攻撃されうるか",
+          "fix": "具体的な修正案"
+        }
+      ],
+      "summary": "この観点での全体的な評価（1-2文）"
+    }

@@ -1,0 +1,15 @@
+diff --git a/app/controllers/payments_controller.rb b/app/controllers/payments_controller.rb
+index e69de29..a3b4c5d 100644
+--- a/app/controllers/payments_controller.rb
++++ b/app/controllers/payments_controller.rb
+@@ -1,9 +1,15 @@
+ class PaymentsController < ApplicationController
+   before_action :authenticate_user!
++  # Rails default の CSRF 防御を明示。skip_before_action は使わない。
++  protect_from_forgery with: :exception
+
++  def transfer
++    Payment.create!(user: current_user, amount: params[:amount], to: params[:to_account])
++    redirect_to payments_path, notice: "送金しました"
++  end
+ end
