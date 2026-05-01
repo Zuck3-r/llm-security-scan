@@ -78,12 +78,29 @@ jobs:
           fetch-depth: 0
 
       # 2) このツール自身を同じ ref で .llm-security-scan/ にチェックアウト
-      - name: Resolve workflow ref
+      #
+      # 注意: reusable workflow 内では `github.workflow_ref` は caller 側の
+      # workflow ref を指してしまう (例: caller の PR トリガなら
+      # `refs/pull/N/merge`)。`Zuck3-r/llm-security-scan` repo にその ref は
+      # 存在しないため checkout が失敗する。
+      # 代わりに OIDC token の `job_workflow_ref` クレームを使う。
+      # これは「現在実行中の reusable workflow 自身」が呼ばれた ref を返す。
+      # 必要権限: id-token: write (本ジョブの permissions で許可済み)
+      - name: Resolve workflow ref (via OIDC job_workflow_ref)
         id: tool_ref
         run: |
-          REF="${{ github.workflow_ref }}"
-          # github.workflow_ref = "owner/repo/.github/workflows/scan.yml@<ref>"
-          echo "ref=${REF##*@}" >> "$GITHUB_OUTPUT"
+          set -euo pipefail
+          TOKEN=$(curl -sLS \
+            -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=llm-security-scan" \
+            | python3 -c 'import sys,json;print(json.load(sys.stdin)["value"])')
+          PAYLOAD=$(echo "$TOKEN" | cut -d. -f2)
+          # base64url padding を復元
+          while [ $(( ${#PAYLOAD} % 4 )) -ne 0 ]; do PAYLOAD="${PAYLOAD}="; done
+          JOB_REF=$(echo "$PAYLOAD" | tr '_-' '/+' | base64 -d \
+            | python3 -c 'import sys,json;print(json.load(sys.stdin)["job_workflow_ref"])')
+          # job_workflow_ref = "<owner>/llm-security-scan/.github/workflows/scan.yml@<ref>"
+          echo "ref=${JOB_REF##*@}" >> "$GITHUB_OUTPUT"
 
       - uses: actions/checkout@v4
         with:
