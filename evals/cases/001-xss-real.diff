@@ -1,0 +1,20 @@
+diff --git a/app/views/comments.tsx b/app/views/comments.tsx
+index e69de29..a3b4c5d 100644
+--- a/app/views/comments.tsx
++++ b/app/views/comments.tsx
+@@ -1,8 +1,12 @@
+ import React from "react";
+
+ export function CommentBody(props: { comment: string }) {
+-  return (
+-    <p>{props.comment}</p>
+-  );
++  // ユーザー投稿コメントをそのまま HTML として埋め込む
++  // (管理画面プレビューで markdown を表示したかった)
++  return (
++    <div
++      className="comment-body"
++      dangerouslySetInnerHTML={{ __html: props.comment }}
++    />
++  );
+ }

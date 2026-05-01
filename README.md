@@ -186,13 +186,56 @@ python replay.py --pr-range 1..50 --no-triage  # コスト節約モード
 
 `.github/workflows/replay.yml` を Run workflow から起動。`pr` または `pr_range` を入力すると `replays/*.json` が artifact としてアップロードされる。
 
-## Eval スコア
+## Eval (Step 2)
 
-> (eval harness 実装後に更新)
+プロンプト編集や perspective 追加で**過去に正しく判定できていたケースが落ちていないか** を CI で担保する仕組み。`evals/cases/*.diff` を `engine.scan_diff()` に流し、`evals/expected.yml` の期待値と突合する。
 
-| case | expected | actual | confidence | pass |
-|------|----------|--------|------------|------|
-| — | — | — | — | — |
+### 追加方法
+
+1. `evals/cases/<id>-<title>.diff` を置く（手書き or replay の出力から流用）
+2. `evals/expected.yml` に 1 エントリ追加：
+
+```yaml
+- case:                  003-sqli-real
+  expect_verdict:        confirmed         # confirmed | dismissed | inconclusive
+  expect_perspective:    injection
+  expect_min_confidence: 0.7               # confirmed のときのみ意味あり
+```
+
+判定セマンティクス：
+
+| `expect_verdict` | pass 条件 |
+|---|---|
+| `confirmed` | 該当観点に `triage_status=confirmed` の finding が >=1、最高 confidence が `expect_min_confidence` 以上 |
+| `dismissed` | 該当観点に `triage_status=confirmed` の finding が 1 件も無い（validator で弾かれた / LLM 検出なし / triage が dismissed 化、いずれも OK） |
+| `inconclusive` | 該当観点に `triage_status=inconclusive` の finding が >=1 |
+
+### ローカル実行
+
+```bash
+python eval.py                              # 通常実行 (retry あり)
+python eval.py --verbose                    # attempt ごとのログを stderr に
+python eval.py --no-retry                   # retry を無効化 (デバッグ用)
+python eval.py --context SECURITY-CONTEXT.md
+```
+
+出力例：
+
+```
+case          expected                   actual                att  status
+001-xss-real  confirmed/xss/conf>=0.7    C=1 D=0 I=0 (total=1)   1  PASS
+002-xss-fp    dismissed/xss              C=0 D=0 I=0 (total=0)   1  PASS
+
+OK 2/2 cases passed (0 retries used)
+```
+
+### Retry ポリシー
+
+LLM は temperature=0 でも完全には決定的ではないため、不一致 case は **1 回だけ retry** する（Run 1 fail → Run 2 pass なら `PASS_RETRY` 扱い）。2 連続不一致なら本物の degrade として `FAIL`。`--no-retry` で無効化可能（デバッグ時）。
+
+### CI
+
+PR と main push の両方で `.github/workflows/eval.yml` が実行され、失敗するとマージできない。external contributor の PR は secrets が無いため落ちる仕様（必要なら branch protection で必須化）。
 
 
 ## 設計思想
