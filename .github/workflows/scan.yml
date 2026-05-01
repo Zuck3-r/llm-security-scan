@@ -276,7 +276,7 @@ jobs:
           GOOGLE_CLOUD_PROJECT:  ${{ vars.GCP_PROJECT  || 'CHANGE_ME' }}
           GOOGLE_CLOUD_LOCATION: ${{ vars.GCP_LOCATION || 'us-central1' }}
           GEMINI_API_KEY:        ${{ secrets.GEMINI_API_KEY }}
-          LLM_MODEL:             ${{ vars.LLM_MODEL || 'gpt-5.5-pro' }}
+          LLM_MODEL:             ${{ vars.LLM_MODEL || 'gpt-5.5' }}
           TRIAGE_ENABLED:        ${{ inputs.triage_enabled }}
           MAX_LOW:               ${{ inputs.max_low_per_perspective }}
           DEBATE_ROUNDS:         ${{ inputs.debate_rounds }}
