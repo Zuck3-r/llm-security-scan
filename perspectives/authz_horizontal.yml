@@ -1,0 +1,73 @@
+id: authz_horizontal
+name: 権限不備 (横 / Horizontal — IDOR / BOLA)
+enabled: true
+severity_weight: Critical
+
+# 横の権限不備 = 同じ role の別ユーザーのリソースを読み書きできる経路を扱う。
+# IDOR (Insecure Direct Object Reference) / BOLA (Broken Object-Level Authorization) と
+# 呼ばれる脆弱性領域。OWASP API Security Top 10 #1。
+# role を上げる方向の不正は authz_vertical、認証欠落は authn の責務。
+#
+# プロジェクト固有の所有チェック関数 / scope 命名は overrides_path で追加すること。
+code_safe_patterns:
+  - "\\.user_id\\s*==\\s*current_user"        # resource.user_id == current_user(.id)
+  - "\\.owner_id\\s*==\\s*current_user"
+  - "current_user\\.[a-zA-Z_]+\\.find"        # current_user.posts.find(id) 形式
+  - "Pundit|policy_scope|authorize\\s*\\("    # Pundit (Ruby)
+  - "can\\?\\(|cannot\\?\\("                  # CanCanCan (Ruby)
+  - "enforce\\(.*subject"                     # Casbin (多言語)
+  - "@guard|requires_owner"                   # 一般的な所有 guard 命名
+  - "where\\([^)]*user_id\\s*=\\s*[^)]*current_user"   # 所有スコープでのフィルタ
+
+prompt:
+  detect_patterns: |
+    1. ID 直接参照 (IDOR / BOLA)
+       - path / query / body から受け取った resource_id をそのまま find / update /
+         delete に使い、所有チェックをしていない
+       - 別ユーザの ID を渡せば他人のリソースが読める / 書ける / 消せる
+       - file ダウンロード API がファイル ID だけで配信し、所有 / 共有関係を見ていない
+    2. リスト系 API のスコープ漏れ
+       - GET /posts や GET /orders で current_user.id によるフィルタが無く
+         全ユーザのデータが返る
+       - search / export 系で同様のスコープ漏れ
+       - admin 用の "全件取得" 経路が一般 role でも到達可能
+    3. ネスト リソースの所有関係未検証
+       - /users/:user_id/posts/:post_id で post.user_id == params[:user_id] を
+         確認していない (path 偽装で他人の post にアクセス)
+       - 親リソースの所有を確認しても子リソースまで連鎖確認していない
+    4. tenant / organization 跨ぎ
+       - マルチテナント SaaS で tenant_id を session ではなく request から受け取り、
+         他社テナントのデータに到達できる
+    5. キャッシュ / pre-signed URL での漏洩
+       - pre-signed URL を発行する際に所有チェックを行っていない
+       - キャッシュキーに user_id を含めず、別ユーザに他人のデータが返る
+
+  safe_patterns: |
+    以下は検出しない (誤検知を避ける):
+    - 明示的な所有チェック: resource.user_id == current_user.id
+      (== owner_id / account_id 等の同等表現を含む)
+    - ORM スコープ経由のアクセス: current_user.posts.find(id) のように
+      所有関係から辿ってリソース取得している
+    - 認可 framework 経由: Pundit (authorize @post), CanCanCan (authorize! :read, @post),
+      Casbin (enforce(sub, obj, act)), Cerbos 等
+    - クエリレベルでの scope 縛り: where(user_id: current_user.id) / policy_scope(Post)
+    - tenant 用の middleware が session の tenant_id を強制注入している
+    ※ admin / 上位 role への昇格は authz_vertical の責務。本観点は同 role 内の
+      横断的なアクセスのみを扱う。
+
+  output_schema: |
+    以下のJSON形式で出力してください。findings が空なら問題なしです。
+    JSONのみを出力し、コードフェンス（```）や説明文を付けないでください。
+    {
+      "findings": [
+        {
+          "file": "ファイルパス（diffヘッダーから取得）",
+          "line": "行番号または該当箇所の説明",
+          "severity": "Critical|High|Medium|Low",
+          "title": "問題の簡潔なタイトル",
+          "detail": "何が問題で、どう攻撃されうるか",
+          "fix": "具体的な修正案"
+        }
+      ],
+      "summary": "この観点での全体的な評価（1-2文）"
+    }

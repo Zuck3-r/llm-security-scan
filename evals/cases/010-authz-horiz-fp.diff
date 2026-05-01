@@ -1,0 +1,15 @@
+diff --git a/app/controllers/posts_controller.rb b/app/controllers/posts_controller.rb
+index e69de29..a3b4c5d 100644
+--- a/app/controllers/posts_controller.rb
++++ b/app/controllers/posts_controller.rb
+@@ -1,8 +1,15 @@
+ class PostsController < ApplicationController
+   before_action :authenticate_user!
+
++  # current_user.posts スコープから .find しているため、他ユーザの post_id
++  # を渡しても ActiveRecord::RecordNotFound で 404 になる (所有スコープ縛り)。
++  def show
++    @post = current_user.posts.find(params[:id])
++    render json: @post.as_json
++  end
+ end

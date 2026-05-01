@@ -1,0 +1,21 @@
+diff --git a/api/profile.py b/api/profile.py
+index e69de29..a3b4c5d 100644
+--- a/api/profile.py
++++ b/api/profile.py
+@@ -1,8 +1,16 @@
+ from flask import Blueprint, request, jsonify
+ from flask_login import login_required, current_user
+ from app.models import User
+ from app.db import db
+
+ bp = Blueprint("profile", __name__)
+
++# 一般ユーザが自分自身のプロフィールを更新するエンドポイント。
++# request.json をそのまま update に渡しているため、攻撃者が
++# {"name": "x", "role": "admin"} を送れば自身を admin に昇格できる。
++@bp.route("/api/profile/me", methods=["PATCH"])
++@login_required
++def update_me():
++    User.query.filter_by(id=current_user.id).update(request.json)
++    db.session.commit()
++    return jsonify({"ok": True})

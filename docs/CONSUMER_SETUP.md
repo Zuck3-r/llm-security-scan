@@ -12,7 +12,7 @@
 
 | レベル | 内容 | 工数 |
 |---|---|---|
-| **L1: スキャンのみ** | PR diff に対する LLM スキャン + sticky comment。汎用 5 観点をそのまま使う | 5 分 |
+| **L1: スキャンのみ** | PR diff に対する LLM スキャン + sticky comment。汎用 8 観点をそのまま使う | 5 分 |
 | **L2: + 文脈** | `SECURITY-CONTEXT.md` でプロジェクト固有の認証 decorator や sanitizer を LLM に伝えて誤検知を減らす | 30 分 |
 | **L3: + eval CI** | プロジェクト固有の eval ケースを書き、プロンプト変更で degrade した時に PR をブロック | 数時間〜継続 |
 
@@ -66,7 +66,7 @@ jobs:
 - Actions タブで `Security Scan` workflow が走ることを確認
 - PR のコメント欄に `🛡️ LLM Security Scan` というタイトルのコメントが付くことを確認
 
-→ ここまでが L1。これだけで OWASP の 5 観点（XSS / SQL/NoSQL/コマンドインジェクション / 認証認可 / Secrets / SSRF・Path Traversal）に対するベースラインのスキャンが効きます。
+→ ここまでが L1。これだけで 8 観点（XSS / SQL/NoSQL/コマンドインジェクション / 認証 / CSRF / 縦の権限昇格 / 横の権限不備 (IDOR) / Secrets / SSRF・Path Traversal）に対するベースラインのスキャンが効きます。
 
 ---
 
@@ -127,16 +127,16 @@ jobs:
       GEMINI_API_KEY:  ${{ secrets.GEMINI_API_KEY }}
 ```
 
-これで全 LLM 呼び出し（5 観点 × scan + Attacker / Defender / Judge × triage）の system prompt 末尾に文脈が注入されます。LLM は `@authed` を見たら認証ガードとして扱い、`Render()` を見たら XSS 安全と判断するようになります。
+これで全 LLM 呼び出し（8 観点 × scan + Attacker / Defender / Judge × triage）の system prompt 末尾に文脈が注入されます。LLM は `@authed` を見たら認証ガードとして扱い、`Render()` を見たら XSS 安全と判断するようになります。
 
 ### (任意) Step 3: perspectives 自体の上書き
 
-正規表現で機械的に弾きたい場合は、`code_safe_patterns` を追加した perspective YAML を `.github/security-scan-overrides/perspectives/auth.yml` に置く：
+正規表現で機械的に弾きたい場合は、`code_safe_patterns` を追加した perspective YAML を `.github/security-scan-overrides/perspectives/authn.yml` に置く（観点 ID は `authn` / `csrf` / `authz_vertical` / `authz_horizontal` / `xss` / `injection` / `secrets` / `ssrf_path` から該当するものを選ぶ）：
 
 ```yaml
-# .github/security-scan-overrides/perspectives/auth.yml
-id: auth
-name: 認証・認可 (Authn / Authz / IDOR)
+# .github/security-scan-overrides/perspectives/authn.yml
+id: authn
+name: 認証 (未認証アクセス・JWT 検証)
 enabled: true
 severity_weight: Critical
 code_safe_patterns:
@@ -204,7 +204,7 @@ index e69de29..a3b4c5d 100644
 +    return db.q("SELECT * FROM users WHERE id = $1", user_id)
 ```
 
-これは `@authed` decorator + ORM placeholder で **safe**。auth 観点で confirmed が出てはいけない（誤検知）。
+これは `@authed` decorator + ORM placeholder で **safe**。authn 観点で confirmed が出てはいけない（誤検知）。
 
 `.github/security-scan-overrides/cases/002-authed-missing.diff`：
 
@@ -223,7 +223,7 @@ index e69de29..a3b4c5d 100644
 +    return {"ok": True}
 ```
 
-これは **decorator 無しの破壊的 API**。auth 観点で confirmed であるべき。
+これは **decorator 無しの破壊的 API**。authn 観点で confirmed であるべき。
 
 ### Step 2: `expected.yml` を書く
 
@@ -232,11 +232,11 @@ index e69de29..a3b4c5d 100644
 ```yaml
 - case: 001-authed-safe
   expect_verdict: dismissed
-  expect_perspective: auth
+  expect_perspective: authn
 
 - case: 002-authed-missing
   expect_verdict: confirmed
-  expect_perspective: auth
+  expect_perspective: authn
   expect_min_confidence: 0.7
 ```
 
@@ -341,7 +341,7 @@ your-repo/
 │   └── security-scan-overrides/
 │       ├── SECURITY-CONTEXT.md        ← L2 の文脈ファイル
 │       ├── perspectives/              ← (任意) perspective 上書き
-│       │   └── auth.yml
+│       │   └── authn.yml
 │       ├── triage_prompts.yml         ← (任意) triage prompts 上書き
 │       ├── cases/                     ← L3 の eval ケース
 │       │   ├── 001-authed-safe.diff

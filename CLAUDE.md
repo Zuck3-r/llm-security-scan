@@ -52,10 +52,13 @@ llm-security-scan/
 │   ├── validator.py               4 検証ゲート: schema / file-existence / dedup / safe_pattern
 │   ├── reporter.py                Markdown レポート生成 (sticky PR comment)
 │   └── providers.py               LLM プロバイダー切替 (OpenAI > Vertex AI > Gemini)
-├── perspectives/                  汎用デフォルト観点 (5 つ)
+├── perspectives/                  汎用デフォルト観点 (8 つ)
 │   ├── xss.yml
 │   ├── injection.yml
-│   ├── auth.yml
+│   ├── authn.yml                  認証 (未認証アクセス・JWT 検証)
+│   ├── csrf.yml                   CSRF
+│   ├── authz_vertical.yml         縦の権限昇格
+│   ├── authz_horizontal.yml       横の権限不備 / IDOR
 │   ├── secrets.yml
 │   └── ssrf_path.yml
 ├── triage_prompts.yml             Attacker / Defender / Judge のロール別プロンプト
@@ -232,6 +235,7 @@ judge:
 - Phase 1: ハーネス骨格 + xss / injection 観点 + 4 検証ゲート
 - Phase 2: 弁証法的トリアージ + PoC 構築 + YAML 化 + 英語 system 化 + file filter 厳格化
 - Phase 3: auth / secrets / ssrf_path 観点追加 + Judge confidence (0.0–1.0) + 低確信 dismissed の救済
+- Phase 4 (post v0.5): auth.yml を authn / csrf / authz_vertical / authz_horizontal の 4 観点に分割（責務明確化・PR レポートのカテゴリ独立化・領域固有 safe_pattern の精度向上）
 
 ### Step 0: Beacon からの移植 + 汎用化（このリポジトリの初期作業）
 
@@ -315,9 +319,18 @@ CI: PR で eval が落ちたらマージ不可。
 
 ## 10. やらないこと
 
-- perspective の新規追加（既存 5 つで止める）
 - 隔離環境での PoC 実投擲（dynamic verification）
 - テストファイルのスキャン（file filter で除外済み）
+
+### 観点追加の方針
+
+観点は領域ごとに必要なだけ追加する。境界が曖昧な複合観点は分割して責務を明確化する。
+追加・分割時のルール:
+
+- 1 観点 = 1 つの責務領域（例: authn と authz_vertical は別観点）
+- `code_safe_patterns` は当該観点に固有のマーカーのみを置く（汎用すぎる regex は別観点の真の脆弱性まで吸収する）
+- prompt の `safe_patterns` 末尾で「他観点の責務との境界」を明示（重複検出は validator のゲート3 dedup で吸収されるが、prompt 側でも切り分ける）
+- 追加に伴い更新するもの: README の観点表、CONSUMER_SETUP の例示観点 id、evals/expected.yml のコメント
 
 
 ## 11. 開発ブランチ運用

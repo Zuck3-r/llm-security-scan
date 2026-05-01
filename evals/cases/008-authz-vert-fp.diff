@@ -1,0 +1,26 @@
+diff --git a/api/profile.py b/api/profile.py
+index e69de29..a3b4c5d 100644
+--- a/api/profile.py
++++ b/api/profile.py
+@@ -1,8 +1,21 @@
+ from flask import Blueprint, request, jsonify
+ from flask_login import login_required, current_user
++from pydantic import BaseModel
+ from app.models import User
+ from app.db import db
+
+ bp = Blueprint("profile", __name__)
+
++# 更新可能フィールドを Pydantic で allow-list 化。role 等の権限フィールドは
++# モデルに含めないため、攻撃者がリクエストに role を混ぜても無視される。
++class ProfileUpdate(BaseModel):
++    name: str
++    bio: str | None = None
++
++@bp.route("/api/profile/me", methods=["PATCH"])
++@login_required
++def update_me():
++    payload = ProfileUpdate.model_validate(request.json)
++    User.query.filter_by(id=current_user.id).update(payload.model_dump(exclude_unset=True))
++    db.session.commit()
++    return jsonify({"ok": True})

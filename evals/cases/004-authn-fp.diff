@@ -1,0 +1,17 @@
+diff --git a/api/users.py b/api/users.py
+index e69de29..a3b4c5d 100644
+--- a/api/users.py
++++ b/api/users.py
+@@ -1,8 +1,15 @@
+ from flask import Blueprint, request, jsonify
+ from flask_login import login_required, current_user
+ from app.db import db
+
+ bp = Blueprint("users", __name__)
+
++# 認証必須エンドポイント。@login_required で未認証アクセスを弾く。
++@bp.route("/api/users/me", methods=["GET"])
++@login_required
++def get_me():
++    row = db.execute("SELECT id, email FROM users WHERE id = %s", (current_user.id,)).fetchone()
++    return jsonify({"id": row[0], "email": row[1]})
