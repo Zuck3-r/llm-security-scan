@@ -1,5 +1,5 @@
 id: authz_vertical
-name: 権限昇格 (縦 / Vertical privilege escalation)
+name: 縦の権限昇格 (権限上昇)
 enabled: true
 severity_weight: Critical
 

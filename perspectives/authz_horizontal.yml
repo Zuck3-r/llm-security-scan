@@ -1,5 +1,5 @@
 id: authz_horizontal
-name: 権限不備 (横 / Horizontal — IDOR / BOLA)
+name: 横の権限不備 (権限の不備 / IDOR / BOLA)
 enabled: true
 severity_weight: Critical
 
