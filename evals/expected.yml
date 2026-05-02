@@ -86,3 +86,13 @@
 - case:                   016-ssrf-fp
   expect_verdict:         dismissed
   expect_perspective:     ssrf_path
+
+# v0.6.1: csrf 観点の精度改善 — 自作 broken middleware と framework default の境界
+- case:                   017-csrf-broken-self-rolled
+  expect_verdict:         confirmed
+  expect_perspective:     csrf
+  expect_min_confidence:  0.7
+
+- case:                   018-csrf-rails-default
+  expect_verdict:         dismissed
+  expect_perspective:     csrf
