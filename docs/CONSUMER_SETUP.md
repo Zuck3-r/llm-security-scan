@@ -139,7 +139,7 @@ jobs:
 ```yaml
 # .github/security-scan-overrides/perspectives/authn.yml
 id: authn
-name: 不適切な認証 (未認証ユーザの不正な機能利用)
+name: 認証 (未認証アクセス・JWT 検証)
 enabled: true
 severity_weight: Critical
 code_safe_patterns:

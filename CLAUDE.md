@@ -55,10 +55,10 @@ llm-security-scan/
 ├── perspectives/                  汎用デフォルト観点 (8 つ)
 │   ├── xss.yml
 │   ├── injection.yml
-│   ├── authn.yml                  不適切な認証 (未認証ユーザの不正な機能利用)
+│   ├── authn.yml                  認証 (未認証アクセス・JWT 検証)
 │   ├── csrf.yml                   CSRF
-│   ├── authz_vertical.yml         縦の権限昇格 (権限上昇)
-│   ├── authz_horizontal.yml       横の権限不備 (権限の不備 / IDOR / BOLA)
+│   ├── authz_vertical.yml         縦の権限昇格
+│   ├── authz_horizontal.yml       横の権限不備 / IDOR
 │   ├── secrets.yml
 │   └── ssrf_path.yml
 ├── triage_prompts.yml             Attacker / Defender / Judge のロール別プロンプト

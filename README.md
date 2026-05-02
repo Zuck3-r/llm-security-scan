@@ -55,10 +55,10 @@ jobs:
 |---|----|------|------------------|
 | 1 | `xss` | XSS (クロスサイトスクリプティング) | High |
 | 2 | `injection` | インジェクション (SQLi / NoSQLi / コマンド) | Critical |
-| 3 | `authn` | 不適切な認証 (未認証ユーザの不正な機能利用) | Critical |
+| 3 | `authn` | 認証 (未認証アクセス・JWT 検証) | Critical |
 | 4 | `csrf` | CSRF (Cross-Site Request Forgery) | High |
-| 5 | `authz_vertical` | 縦の権限昇格 (権限上昇) | Critical |
-| 6 | `authz_horizontal` | 横の権限不備 (権限の不備 / IDOR / BOLA) | Critical |
+| 5 | `authz_vertical` | 権限昇格 (縦) | Critical |
+| 6 | `authz_horizontal` | 権限不備 (横 / IDOR / BOLA) | Critical |
 | 7 | `secrets` | 秘匿情報の混入 / 漏洩 | Critical |
 | 8 | `ssrf_path` | SSRF / Path Traversal | High |
 
