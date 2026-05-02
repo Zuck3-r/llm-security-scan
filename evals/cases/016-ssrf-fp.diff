@@ -1,0 +1,29 @@
+diff --git a/api/preview.py b/api/preview.py
+index e69de29..a3b4c5d 100644
+--- a/api/preview.py
++++ b/api/preview.py
+@@ -1,8 +1,24 @@
+ import ipaddress
+ import socket
+ from urllib.parse import urlparse
+
+ import requests
+ from flask import Blueprint, request, jsonify
+
+ bp = Blueprint("preview", __name__)
+
++ALLOWED_SCHEMES = {"http", "https"}
++
++# ユーザー指定 URL のプレビュー。scheme allowlist + host を解決して
++# private / loopback / link-local IP を弾く (cloud metadata 169.254.169.254 含む)。
++@bp.route("/api/preview", methods=["GET"])
++def preview():
++    url = request.args.get("url", "")
++    parsed = urlparse(url)
++    if parsed.scheme not in ALLOWED_SCHEMES or not parsed.hostname:
++        return jsonify({"error": "invalid url"}), 400
++    ip = ipaddress.ip_address(socket.gethostbyname(parsed.hostname))
++    if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved:
++        return jsonify({"error": "blocked host"}), 400
++    resp = requests.get(url, timeout=5, allow_redirects=False)
++    return jsonify({"status": resp.status_code, "body": resp.text[:2000]})

@@ -1,0 +1,17 @@
+diff --git a/api/preview.py b/api/preview.py
+index e69de29..a3b4c5d 100644
+--- a/api/preview.py
++++ b/api/preview.py
+@@ -1,8 +1,15 @@
+ import requests
+ from flask import Blueprint, request, jsonify
+
+ bp = Blueprint("preview", __name__)
+
++# ユーザーが指定した URL のプレビュー (OGP) を取りに行く。
++# url は外部入力。scheme / host の検証なしでそのまま fetch する。
++@bp.route("/api/preview", methods=["GET"])
++def preview():
++    url = request.args.get("url", "")
++    resp = requests.get(url, timeout=5, allow_redirects=True)
++    return jsonify({"status": resp.status_code, "body": resp.text[:2000]})
