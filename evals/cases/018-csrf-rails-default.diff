@@ -1,0 +1,26 @@
+diff --git a/app/controllers/comments_controller.rb b/app/controllers/comments_controller.rb
+new file mode 100644
+index 0000000..a3b4c5d
+--- /dev/null
++++ b/app/controllers/comments_controller.rb
+@@ -0,0 +1,17 @@
++# Rails の通常のコントローラ。ApplicationController を継承しているため、
++# Rails default の `protect_from_forgery with: :exception` が effective。
++# 当該 controller で skip_before_action :verify_authenticity_token を呼んで
++# いないので CSRF 防御は有効 = 安全。
++class CommentsController < ApplicationController
++  before_action :authenticate_user!
++
++  def create
++    @post = Post.find(params[:post_id])
++    @comment = @post.comments.build(comment_params)
++    @comment.user = current_user
++    @comment.save!
++    redirect_to @post
++  end
++
++  private
++  def comment_params
++    params.require(:comment).permit(:body)
++  end
++end

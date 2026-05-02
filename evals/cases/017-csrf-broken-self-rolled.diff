@@ -1,0 +1,41 @@
+diff --git a/src/middleware/csrf.js b/src/middleware/csrf.js
+new file mode 100644
+index 0000000..fb05cbf
+--- /dev/null
++++ b/src/middleware/csrf.js
+@@ -0,0 +1,33 @@
++const crypto = require('crypto');
++
++const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
++
++function ensureToken(req) {
++  if (!req.session.csrfToken) {
++    req.session.csrfToken = crypto.randomBytes(24).toString('hex');
++  }
++  return req.session.csrfToken;
++}
++
++// Issues a per-session token and rejects state-changing requests that arrive
++// without the hidden _csrf form field. The token itself is exposed to views
++// through res.locals.csrfToken so templates can embed it in their forms.
++function csrfMiddleware(req, res, next) {
++  const token = ensureToken(req);
++  res.locals.csrfToken = token;
++
++  if (SAFE_METHODS.has(req.method)) {
++    return next();
++  }
++
++  // ⚠ token が body に存在するかだけチェック。session 側 (req.session.csrfToken)
++  //   との値比較を一切していない → 任意の値を付けて送れば通ってしまう。
++  const provided = req.body && req.body._csrf;
++  if (!provided) {
++    return res
++      .status(403)
++      .render('error', { status: 403, message: 'Invalid request token' });
++  }
++
++  next();
++}
++
++module.exports = { csrfMiddleware };

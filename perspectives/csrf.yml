@@ -7,15 +7,17 @@ severity_weight: High
 # 認証は通っているが「ユーザの意図しない第三者起点リクエスト」を扱う。
 # 認証そのものの欠落は authn 観点の責務。
 #
-# プロジェクト固有の CSRF middleware / token 命名は overrides_path で追加すること。
+# プロジェクト固有の CSRF middleware 名は overrides_path で追加すること。
+# ※ 「token 名 (csrf_token / csrfToken / _csrf 等) の出現」を safe pattern に
+#    使わない方針。自作 middleware で値比較を忘れた broken なケースでも
+#    token 名は登場するため、safe マーカーとして信頼できない。
 code_safe_patterns:
-  - "csrf_token|csrfToken|CSRF_TOKEN"           # 一般的な token 命名
   - "CSRFProtect|csrf_protect"                  # Flask-WTF / Django CSRF
   - "csurf"                                     # Express csurf middleware
   - "protect_from_forgery"                      # Rails default
-  - "X-CSRF-Token|X-XSRF-Token"                 # double-submit / SPA 慣用
-  - "SameSite\\s*=\\s*(Strict|Lax)"             # SameSite cookie 属性
-  - "@csrf_protect"                             # Django の view-level decorator
+  - "VerifyCsrfToken"                           # Laravel default
+  - "@csrf_protect"                             # Django view-level decorator
+  - "timingSafeEqual|hmac\\.compare_digest"     # 値比較が constant-time
 
 prompt:
   detect_patterns: |
@@ -26,26 +28,63 @@ prompt:
        - Django の @csrf_exempt を理由なし (or 不適切) に付与
        - Rails の skip_before_action :verify_authenticity_token を本番経路で使用
        - Express で csurf middleware を特定 route のみ外している (理由不明)
-    3. SameSite cookie 設定の不備
+       - Laravel の VerifyCsrfToken::$except に書き加える
+    3. 自作 CSRF middleware の不完全な実装 ★最重要
+       - request 由来 token (body / header / query) が "存在するか" だけチェックし、
+         session / cookie 側に保存した期待値との **値比較** をしていない
+         (例: `if (req.body._csrf) { next() }` だけで通している)
+       - 値比較していても文字列等価 (== / ===) で timing-attack 耐性が無い
+       - token に expiry / 使い回し防止が無く、過去セッションのトークンが永久に通る
+       - token を session ではなく client 側 cookie 単独に置き、HMAC 署名も
+         HttpOnly も無く改ざん可能
+    4. SameSite cookie 設定の不備
        - SameSite=None で Secure 不在 → ブラウザに拒否されるか CSRF に脆弱
        - 認証 cookie で SameSite 属性が一切指定されていない
-    4. ヘッダ依存のみの脆弱な防御
+    5. ヘッダ依存のみの脆弱な防御
        - X-Requested-With ヘッダのみで防御 (古い慣行、preflight 制約緩和で破られる)
        - Origin / Referer 検証のみで token なし (空 Referer や spoof で破られうる)
-    5. GET で副作用のあるエンドポイント
+    6. GET で副作用のあるエンドポイント
        - GET でデータ削除・状態変更を行っている (CSRF 経路を image タグ等に拡張する)
-    6. JSON エンドポイントでの油断
+    7. JSON エンドポイントでの油断
        - "JSON だから安全" を理由に CSRF 防御を省いているが、Content-Type 制約が
          middleware 側で enforce されていない (text/plain で受けてしまう等)
 
   safe_patterns: |
     以下は検出しない (誤検知を避ける):
-    - Django CSRFProtect / Flask-WTF CSRFProtect / Rails protect_from_forgery /
-      Express csurf 等の標準 middleware が attached で、当該 route が exempt されていない
-    - SameSite=Strict または SameSite=Lax + Secure cookie が設定されている
-    - Double-Submit Cookie パターン (cookie と header / form value の一致確認)
-    - JWT の Bearer 認証のみで cookie を一切使わない API (CSRF 不要)
-    - GitHub OAuth callback 等、state パラメータで origin を縛っているフロー
+
+    A. 標準 framework middleware が attached:
+       - Django CSRFProtect / Flask-WTF CSRFProtect / Rails protect_from_forgery /
+         Express csurf / Laravel VerifyCsrfToken 等が当該 route に effective で、
+         exempt されていない
+
+    B. **framework default の CSRF 防御は diff に見えなくても safe**:
+       - Rails: ApplicationController を継承し、当該 controller で
+         `skip_before_action :verify_authenticity_token` が無ければ
+         `protect_from_forgery` が effective (Rails default)
+       - Django: settings の MIDDLEWARE に `CsrfViewMiddleware` が default で入っており、
+         当該 view が `@csrf_exempt` されていなければ effective
+       - Laravel: `app/Http/Kernel.php` の web middleware group に `VerifyCsrfToken` が
+         default で含まれ、当該 route が `$except` に無ければ effective
+       - 上記 framework の controller / view / route 追加時、明示的な解除痕跡 (`skip_*` /
+         `@csrf_exempt` / `$except`) が diff に無ければ default 防御が効いていると見做す
+
+    C. 自作 middleware の場合の条件:
+       - request 由来 token と session / cookie 側の期待値を **値レベルで一致比較**
+         している (constant-time 比較 (`crypto.timingSafeEqual` / `hmac.compare_digest`)
+         が望ましい)
+       - **「token が存在するか」だけのチェックは safe ではない**
+         (任意値を付けて送れば通ってしまう)
+
+    D. SECURITY-CONTEXT.md 連携:
+       - 「全 route が共通 CSRF middleware を経由する」「自社 framework の `<Name>`
+         decorator は CSRF 検証を含む」等が SECURITY-CONTEXT.md で宣言されていれば、
+         個別 route の diff に CSRF コードが見えなくても safe とみなす
+
+    E. その他:
+       - SameSite=Strict または SameSite=Lax + Secure cookie が設定されている
+         (補助的防御。単独ではなく上記 A〜D と併用)
+       - JWT の Bearer 認証のみで cookie を一切使わない pure JSON API (CSRF 不要)
+       - GitHub OAuth callback 等、state パラメータで origin を縛っているフロー
 
   output_schema: |
     以下のJSON形式で出力してください。findings が空なら問題なしです。

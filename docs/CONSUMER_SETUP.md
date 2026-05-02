@@ -72,7 +72,10 @@ jobs:
 
 ## L2: SECURITY-CONTEXT.md でプロジェクト固有の文脈を渡す
 
-汎用 perspectives は「`@login_required` や `@authenticated` を見たら認証ガード」程度の汎用パターンしか知りません。**自社の内製 framework や独自命名は誤検知の温床** です。
+汎用 perspectives は「`@login_required` や `@authenticated` を見たら認証ガード」程度の汎用パターンしか知りません。**自社の内製 framework や独自命名、アプリの設計意図 (公開掲示板モデル等) は誤検知の温床** です。
+
+> **AI に下書きを作らせる方法は [SECURITY-CONTEXT-GUIDE.md](./SECURITY-CONTEXT-GUIDE.md) を参照。**
+> リポジトリ全体を網羅的に書くのは大変なので、コピペ用の prompt を Claude Code / ChatGPT 等に投入して下書きを生成 → 人間がレビューする運用を推奨します。
 
 ### Step 1: 文脈ファイルを用意
 
