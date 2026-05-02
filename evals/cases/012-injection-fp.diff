@@ -1,0 +1,17 @@
+diff --git a/api/search.py b/api/search.py
+index e69de29..a3b4c5d 100644
+--- a/api/search.py
++++ b/api/search.py
+@@ -1,9 +1,15 @@
+ from flask import Blueprint, request, jsonify
+ from app.db import db
+
+ bp = Blueprint("search", __name__)
+
++# 商品名で検索する。q は placeholder バインドで渡すため SQLi にならない。
++@bp.route("/api/products/search", methods=["GET"])
++def search_products():
++    q = request.args.get("q", "")
++    pattern = f"%{q}%"
++    rows = db.execute("SELECT id, name FROM products WHERE name LIKE %s", (pattern,)).fetchall()
++    return jsonify([{"id": r[0], "name": r[1]} for r in rows])

@@ -59,3 +59,30 @@
 - case:                   010-authz-horiz-fp
   expect_verdict:         dismissed
   expect_perspective:     authz_horizontal
+
+- case:                   011-injection-real
+  expect_verdict:         confirmed
+  expect_perspective:     injection
+  expect_min_confidence:  0.7
+
+- case:                   012-injection-fp
+  expect_verdict:         dismissed
+  expect_perspective:     injection
+
+- case:                   013-secrets-real
+  expect_verdict:         confirmed
+  expect_perspective:     secrets
+  expect_min_confidence:  0.7
+
+- case:                   014-secrets-fp
+  expect_verdict:         dismissed
+  expect_perspective:     secrets
+
+- case:                   015-ssrf-real
+  expect_verdict:         confirmed
+  expect_perspective:     ssrf_path
+  expect_min_confidence:  0.7
+
+- case:                   016-ssrf-fp
+  expect_verdict:         dismissed
+  expect_perspective:     ssrf_path
