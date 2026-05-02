@@ -2,9 +2,25 @@ diff --git a/app/views/comments.tsx b/app/views/comments.tsx
 index e69de29..a3b4c5d 100644
 --- a/app/views/comments.tsx
 +++ b/app/views/comments.tsx
-@@ -1,8 +1,12 @@
+@@ -1,8 +1,25 @@
  import React from "react";
 
++type Comment = { id: string; body: string };
++
++// 一覧ページから呼ばれる。comments は GET /api/comments のレスポンスで、
++// DB に保存されたユーザー投稿テキスト (body) がそのまま JSON で返ってくる。
++export function CommentList(props: { comments: Comment[] }) {
++  return (
++    <ul>
++      {props.comments.map((c) => (
++        <li key={c.id}>
++          <CommentBody comment={c.body} />
++        </li>
++      ))}
++    </ul>
++  );
++}
++
  export function CommentBody(props: { comment: string }) {
 -  return (
 -    <p>{props.comment}</p>
