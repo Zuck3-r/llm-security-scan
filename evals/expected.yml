@@ -107,3 +107,8 @@
 - case:                   020-business-logic-fp
   expect_verdict:         dismissed
   expect_perspective:     business_logic
+
+- case:                   021-business-logic-toctou-real
+  expect_verdict:         confirmed
+  expect_perspective:     business_logic
+  expect_min_confidence:  0.7
