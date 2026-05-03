@@ -1,21 +1,27 @@
-diff --git a/app/services/coupon_service.rb b/app/services/coupon_service.rb
-index e69de29..c7a8b3d 100644
---- a/app/services/coupon_service.rb
-+++ b/app/services/coupon_service.rb
-@@ -0,0 +1,16 @@
-+class CouponService
-+  def redeem(coupon_code, order)
-+    coupon = Coupon.find_by!(code: coupon_code)
+diff --git a/app/controllers/orders_controller.rb b/app/controllers/orders_controller.rb
+index e69de29..b2a5c7d 100644
+--- a/app/controllers/orders_controller.rb
++++ b/app/controllers/orders_controller.rb
+@@ -0,0 +1,22 @@
++class OrdersController < ApplicationController
++  before_action :authenticate_user!
 +
-+    # クーポンが未使用かチェック
-+    raise "Already redeemed" if coupon.redeemed
++  def create
++    product = Product.find(params[:product_id])
 +
-+    # 割引を適用
-+    order.apply_discount(coupon.discount_amount)
-+    order.save!
++    # フロントエンドから送信された価格をそのまま使用。
++    # React 側では product.price を表示しているが、
++    # API はリクエストボディの price を信頼している。
++    order = Order.create!(
++      user: current_user,
++      product: product,
++      quantity: params[:quantity],
++      unit_price: params[:price],
++      total: params[:price].to_i * params[:quantity].to_i
++    )
 +
-+    # 使用済みにマーク
-+    coupon.update!(redeemed: true, used_at: Time.current)
-+    coupon
++    PaymentService.charge(current_user, order.total)
++
++    render json: order, status: :created
 +  end
 +end
