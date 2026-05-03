@@ -18,7 +18,7 @@ on:
     branches: [main]
 jobs:
   scan:
-    uses: Zuck3-r/llm-security-scan/.github/workflows/scan.yml@v0.6.0
+    uses: Zuck3-r/llm-security-scan/.github/workflows/scan.yml@v0.7.0
     with:
       overrides_path: ""                # プロジェクト固有の設定がある場合に指定
       perspectives_disabled: ""         # 無効にする観点 (e.g. "secrets,xss")
@@ -276,7 +276,7 @@ on:
     branches: [main]
 jobs:
   eval:
-    uses: Zuck3-r/llm-security-scan/.github/workflows/eval.yml@v0.6.0
+    uses: Zuck3-r/llm-security-scan/.github/workflows/eval.yml@v0.7.0
     with:
       cases_dir:    .github/security-scan-overrides/cases
       expected:     .github/security-scan-overrides/expected.yml
