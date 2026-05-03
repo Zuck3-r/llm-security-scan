@@ -1,0 +1,18 @@
+diff --git a/app/services/transfer_service.rb b/app/services/transfer_service.rb
+index e69de29..d5f9a2c 100644
+--- a/app/services/transfer_service.rb
++++ b/app/services/transfer_service.rb
+@@ -0,0 +1,15 @@
++class TransferService
++  def execute(from_account_id, to_account_id, amount)
++    ActiveRecord::Base.transaction do
++      from = Account.lock("FOR UPDATE").find(from_account_id)
++      to   = Account.lock("FOR UPDATE").find(to_account_id)
++
++      raise InsufficientFunds if from.balance < amount
++
++      from.update!(balance: from.balance - amount)
++      to.update!(balance: to.balance + amount)
++    end
++  end
++end

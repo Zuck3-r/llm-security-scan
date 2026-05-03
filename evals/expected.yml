@@ -9,7 +9,8 @@
 #                    化、いずれも OK)
 #     inconclusive: 該当観点に triage_status=inconclusive が >=1。
 # - expect_perspective: 観点 id (xss / injection / authn / csrf / authz_vertical /
-#                       authz_horizontal / secrets / ssrf_path)。
+#                       authz_horizontal / secrets / ssrf_path /
+#                       business_logic)。
 # - expect_min_confidence: confirmed のときのみ意味あり。default 0.0。
 #
 # 新規ケースは replays/ から「答案確定」できたものを cases/ にコピーして
@@ -96,3 +97,18 @@
 - case:                   018-csrf-rails-default
   expect_verdict:         dismissed
   expect_perspective:     csrf
+
+# v0.7: business_logic 観点 — ビジネスロジック不備 (TOCTOU / 冪等性 / 状態遷移)
+- case:                   019-business-logic-real
+  expect_verdict:         confirmed
+  expect_perspective:     business_logic
+  expect_min_confidence:  0.7
+
+- case:                   020-business-logic-fp
+  expect_verdict:         dismissed
+  expect_perspective:     business_logic
+
+- case:                   021-business-logic-toctou-real
+  expect_verdict:         confirmed
+  expect_perspective:     business_logic
+  expect_min_confidence:  0.7

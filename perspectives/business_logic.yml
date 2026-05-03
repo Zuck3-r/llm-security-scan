@@ -1,0 +1,111 @@
+id: business_logic
+name: ビジネスロジック不備 (サーバ側検証欠落・状態遷移・冪等性)
+enabled: true
+severity_weight: High
+
+# ビジネスロジック不備専用観点。
+# 認証・認可は正しいが、アプリケーション固有のルールがサーバ側で enforce されていない
+# ケースを扱う。具体的には:
+#   - フロントエンドのみの制約 (上限・形式・数量) がバックエンドに無い
+#   - 一回限りのトークン / クーポンの再利用
+#   - 冪等性の欠如による二重処理 (二重課金・二重付与)
+#   - TOCTOU (check-then-act が非原子的)
+#
+# 境界:
+#   - 認証欠落は authn の責務
+#   - 権限昇格は authz_vertical の責務
+#   - 他ユーザリソースへのアクセス (IDOR) は authz_horizontal の責務
+#   - CSRF (第三者起点リクエスト) は csrf の責務
+#   - 本観点は「正規ユーザが自身の権限内で、ビジネスルールを迂回できる」経路のみ
+#
+# プロジェクト固有の冪等性キーヘッダ名や atomicity ヘルパーは overrides_path で追加すること。
+code_safe_patterns:
+  - "Idempotency-Key|idempotency_key|idempotent_key"    # 冪等性キーの処理
+  - "with_lock|with_advisory_lock|acquire_lock"          # 明示的ロック取得
+  - "select_for_update|FOR UPDATE"                       # 行ロック (TOCTOU 防止)
+  - "atomic|transaction\\.atomic|ActiveRecord::Base\\.transaction"  # トランザクション境界
+  - "redeemed.*true|used_at.*!=.*nil|status.*==.*['\"]used"         # 使用済みチェック
+
+prompt:
+  detect_patterns: |
+    1. サーバ側バリデーション欠落 (フロントエンドのみの制約)
+       - フロントエンドで max / min / maxLength / pattern 等の制約をかけているが、
+         対応するバックエンド API でリクエストボディの値を検証していない
+       - 例: フロントで「金額上限 100 万円」を制限しているが API は任意の amount を受け付ける
+       - 例: フロントで「数量 1〜10」を制限しているが API は quantity を検証しない
+       - 例: フロントで選択肢を固定 (enum) しているが API は任意文字列を受け入れる
+       - diff にフロントエンド側の制約コード (validation, maxLength, max, min 等) が
+         見えるのにバックエンド側の対応する検証が無い場合に検出
+    2. 状態遷移の完全性違反 (一回限りの操作の再実行)
+       - 一回限りのトークン / クーポン / 招待コードの使用時に「使用済み」フラグを
+         チェックしていない、または更新していない
+       - 完了済みフローの再実行: 既に completed / settled な注文・決済・申請を
+         再度 execute できる (状態遷移ガード欠如)
+       - ステータス遷移の不正: draft → published は許可だが published → draft に
+         戻せてしまう等、許可されない逆遷移が可能
+    3. 冪等性の欠如 (二重処理)
+       - 決済・課金・ポイント付与・振込等の副作用を伴う操作で、
+         同一リクエストの再送で二重に処理される
+       - Idempotency-Key ヘッダや一意制約による重複排除が無い
+       - リトライ時に前回の処理結果を返さず、新規として再処理してしまう
+    4. TOCTOU (Time-of-Check to Time-of-Use) 競合
+       - 残高チェック → 引き落とし が非原子的 (SELECT → UPDATE が別トランザクション)
+       - 在庫チェック → 在庫減算 が非原子的
+       - クーポン有効チェック → クーポン適用 が非原子的
+       - SELECT FOR UPDATE / advisory lock / atomic decrement 等のロック機構が無い
+    5. クライアント側のみの強制 (その他)
+       - 価格・割引率・手数料をクライアントから受け取り、サーバ側で再計算していない
+       - hidden field / cookie の値をそのまま信頼して処理に使っている
+         (金額, ステータス, ユーザ属性等)
+       - レート制限がフロントエンドのボタン disable のみで、API 側に無い
+
+  safe_patterns: |
+    以下は検出しない (誤検知を避ける):
+
+    A. サーバ側バリデーション済み:
+       - バックエンドで同等以上の制約が実装されている
+         (schema validation, form validation, serializer validation 等)
+       - Pydantic / Joi / Yup / Zod 等のバリデーションライブラリで
+         サーバ側に同等のスキーマが定義されている
+
+    B. 冪等性が確保されている:
+       - Idempotency-Key ヘッダの処理が実装されている
+       - DB の一意制約 (unique constraint) で重複が防がれている
+       - 処理前に「既に処理済みか」をチェックして既存結果を返している
+
+    C. 原子性が確保されている:
+       - SELECT FOR UPDATE / advisory lock でロックを取得してから更新
+       - DB トランザクション内で check と update を一括実行
+       - atomic な UPDATE ... WHERE (UPDATE accounts SET balance = balance - :amount
+         WHERE balance >= :amount) で条件付き更新
+
+    D. 状態遷移ガードが存在する:
+       - ステータスマシン / 状態遷移テーブルで許可される遷移を制限
+       - before_save / before_update で遷移の妥当性を検証
+       - 使用済みフラグ (redeemed, used_at, status='used') のチェックと更新が
+         同一トランザクション内で行われている
+
+    E. SECURITY-CONTEXT.md 連携:
+       - 「API gateway 層でレート制限を実施」「決済は外部サービスが冪等性を保証」
+         等が宣言されていれば、個別 API の diff に見えなくても safe とみなす
+
+    ※ 認証の欠落は authn、権限昇格は authz_vertical、他ユーザリソースアクセスは
+      authz_horizontal、第三者起点リクエストは csrf の責務。
+      本観点は「正規ユーザが自身の権限内でビジネスルールを迂回できる」場合のみを扱う。
+
+  output_schema: |
+    以下のJSON形式で出力してください。findings が空なら問題なしです。
+    JSONのみを出力し、コードフェンス（```）や説明文を付けないでください。
+    {
+      "findings": [
+        {
+          "file": "ファイルパス（diffヘッダーから取得）",
+          "line": "行番号または該当箇所の説明",
+          "severity": "Critical|High|Medium|Low",
+          "title": "問題の簡潔なタイトル",
+          "detail": "何が問題で、どう攻撃されうるか",
+          "fix": "具体的な修正案"
+        }
+      ],
+      "summary": "この観点での全体的な評価（1-2文）"
+    }

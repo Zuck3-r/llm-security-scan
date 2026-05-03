@@ -1,0 +1,38 @@
+diff --git a/app/controllers/coupons_controller.rb b/app/controllers/coupons_controller.rb
+index e69de29..a1b2c3d 100644
+--- a/app/controllers/coupons_controller.rb
++++ b/app/controllers/coupons_controller.rb
+@@ -0,0 +1,11 @@
++class CouponsController < ApplicationController
++  before_action :authenticate_user!
++
++  # POST /orders/:order_id/apply_coupon
++  def apply
++    order = current_user.orders.find(params[:order_id])
++    result = CouponService.new.redeem(params[:coupon_code], order)
++    render json: result
++  end
++end
+diff --git a/app/services/coupon_service.rb b/app/services/coupon_service.rb
+index e69de29..c7a8b3d 100644
+--- a/app/services/coupon_service.rb
++++ b/app/services/coupon_service.rb
+@@ -0,0 +1,18 @@
++class CouponService
++  def redeem(coupon_code, order)
++    coupon = Coupon.find_by!(code: coupon_code)
++
++    raise "Already redeemed" if coupon.redeemed
++    raise "Expired" if coupon.expires_at < Time.current
++
++    # 割引計算 (外部 API 呼び出しを含むため数百 ms かかる)
++    discount = DiscountCalculator.compute(coupon, order)
++    order.apply_discount(discount)
++    order.save!
++
++    # ここまでの間に別リクエストが同じクーポンで通過できる
++    coupon.update!(redeemed: true, redeemed_by: order.user_id, used_at: Time.current)
++
++    { applied: true, discount: discount }
++  end
++end
