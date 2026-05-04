@@ -177,7 +177,7 @@ caller workflow で参照:
 # .github/workflows/security-scan.yml
 jobs:
   scan:
-    uses: Zuck3-r/llm-security-scan/.github/workflows/scan.yml@v0.6.1
+    uses: Zuck3-r/llm-security-scan/.github/workflows/scan.yml@v0.7.0
     with:
       overrides_path: .github/security-scan-overrides
       context_path:   .github/security-scan-overrides/SECURITY-CONTEXT.md

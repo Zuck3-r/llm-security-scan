@@ -37,7 +37,7 @@
 Settings → Variables → New repository variable で：
 - `GCP_PROJECT`: 自社の GCP プロジェクト ID（**必須**。未設定だと `CHANGE_ME` で API 呼び出しが失敗）
 - `GCP_LOCATION`: default `us-central1`（任意）
-- `LLM_MODEL`: default `gpt-4o-mini`（OpenAI 系のときのみ意味あり）
+- `LLM_MODEL`: default `gpt-5.5`（OpenAI 系のときのみ意味あり）
 
 ### Step 2: ワークフローを追加
 
@@ -297,7 +297,7 @@ python replay.py --pr-range 1..50 --repo myorg/myrepo
 # → replays/PR-*.json を眺めて、面白い verdict のものを cases/ に昇格
 ```
 
-各観点（auth / xss / injection / secrets / ssrf_path）で confirmed/dismissed バランスよく **5〜10 ケース** あると、プロンプト改善時の retro-test として強力な武器になります。
+各観点（authn / csrf / authz_vertical / authz_horizontal / xss / injection / secrets / ssrf_path / business_logic / file_inclusion）で confirmed/dismissed バランスよく **5〜10 ケース** あると、プロンプト改善時の retro-test として強力な武器になります。
 
 ---
 
