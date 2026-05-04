@@ -1,0 +1,109 @@
+id: file_inclusion
+name: ファイルインクルージョン / アップロード不備
+enabled: true
+severity_weight: High
+
+# ファイルの取り込み (LFI/RFI) とアップロード・配信の安全性を扱う観点。
+#
+# カバー範囲:
+#   - ローカル/リモートファイルインクルージョン (LFI / RFI)
+#   - ファイルアップロード時の Content-Type / 拡張子 / MIME バリデーション不備
+#   - Pre-signed URL 生成時の制約欠如
+#   - アップロード済みファイル配信時の Stored XSS 経路
+#   - テンプレートパスへの外部入力混入
+#
+# 境界:
+#   - パストラバーサル (../ による任意ファイル読み取り) は ssrf_path の責務
+#   - ZIP slip (zipfile.extractall) は ssrf_path の責務
+#   - reflected / DOM XSS は xss の責務
+#   - 本観点は「ファイル内容の取り込み・配信」に起因する脆弱性のみ
+#
+# プロジェクト固有のアップロードライブラリ名は overrides_path で追加すること。
+code_safe_patterns:
+  - "content_type.*whitelist|allowed_content_types|ALLOWED_EXTENSIONS"  # 拡張子/MIMEホワイトリスト
+  - "Content-Disposition.*attachment"                                   # 強制ダウンロード
+  - "X-Content-Type-Options.*nosniff"                                  # MIME sniffing 防止
+  - "file_validators|FileExtensionValidator|validate_file_type"        # バリデータ
+  - "sanitize_filename|secure_filename"                                # ファイル名サニタイズ
+  - "content_type_allowlist|ContentType.*(?:image/|text/csv)"          # pre-signed URL の型制約
+
+prompt:
+  detect_patterns: |
+    1. ローカルファイルインクルージョン (LFI)
+       - ユーザ入力をそのまま include / require / import / open / render に渡している
+       - テンプレートエンジンのパス指定に外部入力が混入 (render params[:template])
+       - 動的な設定ファイル読み込みでファイル名を外部から受け取っている
+       - 言語固有: PHP の include/require, Ruby の ERB.new(File.read(user_input)),
+         Python の open(user_input), Node の require(user_input)
+    2. リモートファイルインクルージョン (RFI)
+       - 外部 URL をそのまま読み込んで実行・描画している
+       - allow_url_include 相当の設定が有効な状態で外部パスを受け付けている
+    3. Pre-signed URL の Content-Type / 拡張子未制約
+       - S3 generate_presigned_url / generate_presigned_post で ContentType 条件を
+         指定していない (任意の Content-Type でアップロード可能)
+       - GCS signed_url / Azure SAS でも同様に Content-Type が未制約
+       - 拡張子のホワイトリストなしに任意のキー名でアップロードを許可している
+    4. アップロード API のサーバ側バリデーション不備
+       - 拡張子チェックがクライアント側のみ (accept 属性等) でサーバ側にない
+       - Content-Type ヘッダを信頼して拡張子チェックを省略
+         (Content-Type は攻撃者が自由に設定できる)
+       - SVG / HTML / HTA など XSS 実行可能な形式がアップロード可能
+       - ファイルの magic bytes (先頭バイト) を検証していない
+    5. アップロードファイル配信時の Stored XSS 経路
+       - アップロードされたファイルを Content-Disposition: attachment なしで
+         インラインで配信している
+       - X-Content-Type-Options: nosniff が設定されていない
+       - 配信オリジンがアプリ本体と同一 or cookie スコープ内にある
+         (別ドメインの CDN 等で隔離されていない場合、Stored XSS のインパクトが大きい)
+       - ユーザにファイルの直接 URL を返す際に、配信側の Content-Type を
+         アップロード時の値そのまま使っている
+
+  safe_patterns: |
+    以下は検出しない (誤検知を避ける):
+
+    A. ファイルインクルージョン対策済み:
+       - 読み込み対象がハードコードされたホワイトリスト内のみ
+       - テンプレートパスの正規化 + 許可ディレクトリの範囲チェック
+       - 動的 require / include が存在しない (静的インポートのみ)
+
+    B. アップロードバリデーション済み:
+       - サーバ側で拡張子のホワイトリスト (ALLOWED_EXTENSIONS 等) を検証
+       - Content-Type と拡張子の整合性チェック
+       - magic bytes による実ファイル形式の検証
+       - SVG / HTML / HTA 等の実行可能形式を明示的にブロック
+
+    C. Pre-signed URL に制約あり:
+       - ContentType / Content-Type 条件が presigned URL の生成時に指定されている
+       - key パターンで拡張子を制約している (例: *.csv のみ)
+       - アップロード後に Lambda / Cloud Functions でバリデーションしている旨が
+         コメントまたは SECURITY-CONTEXT.md で宣言されている
+
+    D. 配信時の安全対策済み:
+       - Content-Disposition: attachment を強制 (インライン描画を防止)
+       - X-Content-Type-Options: nosniff が設定されている
+       - 配信オリジンがアプリ本体と完全に分離されている
+         (異なるドメインで cookie スコープが重ならない)
+
+    E. SECURITY-CONTEXT.md 連携:
+       - 「CloudFront の response headers policy で Content-Disposition を強制」
+         「WAF でSVG / HTML をブロック」等が宣言されていれば safe とみなす
+
+    ※ パストラバーサル (../) は ssrf_path の責務。
+      本観点は「ファイル内容の取り込み」と「アップロード/配信の安全性」のみを扱う。
+
+  output_schema: |
+    以下のJSON形式で出力してください。findings が空なら問題なしです。
+    JSONのみを出力し、コードフェンス（```）や説明文を付けないでください。
+    {
+      "findings": [
+        {
+          "file": "ファイルパス（diffヘッダーから取得）",
+          "line": "行番号または該当箇所の説明",
+          "severity": "Critical|High|Medium|Low",
+          "title": "問題の簡潔なタイトル",
+          "detail": "何が問題で、どう攻撃されうるか",
+          "fix": "具体的な修正案"
+        }
+      ],
+      "summary": "この観点での全体的な評価（1-2文）"
+    }

@@ -52,7 +52,7 @@ llm-security-scan/
 │   ├── validator.py               4 検証ゲート: schema / file-existence / dedup / safe_pattern
 │   ├── reporter.py                Markdown レポート生成 (sticky PR comment)
 │   └── providers.py               LLM プロバイダー切替 (OpenAI > Vertex AI > Gemini)
-├── perspectives/                  汎用デフォルト観点 (9 つ)
+├── perspectives/                  汎用デフォルト観点 (10)
 │   ├── xss.yml
 │   ├── injection.yml
 │   ├── authn.yml                  認証 (未認証アクセス・JWT 検証)
@@ -61,7 +61,8 @@ llm-security-scan/
 │   ├── authz_horizontal.yml       横の権限不備 / IDOR
 │   ├── secrets.yml
 │   ├── ssrf_path.yml
-│   └── business_logic.yml         ビジネスロジック不備 (検証欠落・状態遷移・冪等性)
+│   ├── business_logic.yml         ビジネスロジック不備 (検証欠落・状態遷移・冪等性)
+│   └── file_inclusion.yml         ファイルインクルージョン / アップロード不備
 ├── triage_prompts.yml             Attacker / Defender / Judge のロール別プロンプト
 ├── .github/workflows/
 │   └── scan.yml                   ★ reusable workflow (on: workflow_call)

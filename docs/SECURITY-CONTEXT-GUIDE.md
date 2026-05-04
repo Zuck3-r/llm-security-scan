@@ -1,6 +1,6 @@
 # SECURITY-CONTEXT.md 作成ガイド
 
-`SECURITY-CONTEXT.md` は、`llm-security-scan` の LLM スキャナに **「diff だけを読んでも分からないリポジトリ固有の事情」** を伝えるためのドキュメントです。これを置くと scan 9 観点 + triage 3 ロール全ての system prompt 末尾に注入され、誤検出 / 見逃しの両方を大きく減らせます。
+`SECURITY-CONTEXT.md` は、`llm-security-scan` の LLM スキャナに **「diff だけを読んでも分からないリポジトリ固有の事情」** を伝えるためのドキュメントです。これを置くと scan 10 観点 + triage 3 ロール全ての system prompt 末尾に注入され、誤検出 / 見逃しの両方を大きく減らせます。
 
 このガイドは「何を書くべきか」と「AI に下書きを作らせるためのコピペ用 prompt」を提供します。
 
