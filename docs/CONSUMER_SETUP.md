@@ -12,7 +12,7 @@
 
 | レベル | 内容 | 工数 |
 |---|---|---|
-| **L1: スキャンのみ** | PR diff に対する LLM スキャン + sticky comment。汎用 9 観点をそのまま使う | 5 分 |
+| **L1: スキャンのみ** | PR diff に対する LLM スキャン + sticky comment。汎用 10 観点をそのまま使う | 5 分 |
 | **L2: + 文脈** | `SECURITY-CONTEXT.md` でプロジェクト固有の認証 decorator や sanitizer を LLM に伝えて誤検知を減らす | 30 分 |
 | **L3: + eval CI** | プロジェクト固有の eval ケースを書き、プロンプト変更で degrade した時に PR をブロック | 数時間〜継続 |
 
@@ -37,7 +37,7 @@
 Settings → Variables → New repository variable で：
 - `GCP_PROJECT`: 自社の GCP プロジェクト ID（**必須**。未設定だと `CHANGE_ME` で API 呼び出しが失敗）
 - `GCP_LOCATION`: default `us-central1`（任意）
-- `LLM_MODEL`: default `gpt-4o-mini`（OpenAI 系のときのみ意味あり）
+- `LLM_MODEL`: default `gpt-5.5`（OpenAI 系のときのみ意味あり）
 
 ### Step 2: ワークフローを追加
 
@@ -66,7 +66,7 @@ jobs:
 - Actions タブで `Security Scan` workflow が走ることを確認
 - PR のコメント欄に `🛡️ LLM Security Scan` というタイトルのコメントが付くことを確認
 
-→ ここまでが L1。これだけで 9 観点（XSS / SQL/NoSQL/コマンドインジェクション / 認証 / CSRF / 縦の権限昇格 / 横の権限不備 (IDOR) / Secrets / SSRF・Path Traversal / ビジネスロジック不備）に対するベースラインのスキャンが効きます。
+→ ここまでが L1。これだけで 10 観点（XSS / SQL/NoSQL/コマンドインジェクション / 認証 / CSRF / 縦の権限昇格 / 横の権限不備 (IDOR) / Secrets / SSRF・Path Traversal / ビジネスロジック不備 / ファイルインクルージョン・アップロード不備）に対するベースラインのスキャンが効きます。
 
 ---
 
@@ -130,11 +130,11 @@ jobs:
       GEMINI_API_KEY:  ${{ secrets.GEMINI_API_KEY }}
 ```
 
-これで全 LLM 呼び出し（9 観点 × scan + Attacker / Defender / Judge × triage）の system prompt 末尾に文脈が注入されます。LLM は `@authed` を見たら認証ガードとして扱い、`Render()` を見たら XSS 安全と判断するようになります。
+これで全 LLM 呼び出し（10 観点 × scan + Attacker / Defender / Judge × triage）の system prompt 末尾に文脈が注入されます。LLM は `@authed` を見たら認証ガードとして扱い、`Render()` を見たら XSS 安全と判断するようになります。
 
 ### (任意) Step 3: perspectives 自体の上書き
 
-正規表現で機械的に弾きたい場合は、`code_safe_patterns` を追加した perspective YAML を `.github/security-scan-overrides/perspectives/authn.yml` に置く（観点 ID は `authn` / `csrf` / `authz_vertical` / `authz_horizontal` / `xss` / `injection` / `secrets` / `ssrf_path` / `business_logic` から該当するものを選ぶ）：
+正規表現で機械的に弾きたい場合は、`code_safe_patterns` を追加した perspective YAML を `.github/security-scan-overrides/perspectives/authn.yml` に置く（観点 ID は `authn` / `csrf` / `authz_vertical` / `authz_horizontal` / `xss` / `injection` / `secrets` / `ssrf_path` / `business_logic` / `file_inclusion` から該当するものを選ぶ）：
 
 ```yaml
 # .github/security-scan-overrides/perspectives/authn.yml
@@ -297,7 +297,7 @@ python replay.py --pr-range 1..50 --repo myorg/myrepo
 # → replays/PR-*.json を眺めて、面白い verdict のものを cases/ に昇格
 ```
 
-各観点（auth / xss / injection / secrets / ssrf_path）で confirmed/dismissed バランスよく **5〜10 ケース** あると、プロンプト改善時の retro-test として強力な武器になります。
+各観点（authn / csrf / authz_vertical / authz_horizontal / xss / injection / secrets / ssrf_path / business_logic / file_inclusion）で confirmed/dismissed バランスよく **5〜10 ケース** あると、プロンプト改善時の retro-test として強力な武器になります。
 
 ---
 

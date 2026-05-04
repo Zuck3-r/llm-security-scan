@@ -1,6 +1,6 @@
 # SECURITY-CONTEXT.md 作成ガイド
 
-`SECURITY-CONTEXT.md` は、`llm-security-scan` の LLM スキャナに **「diff だけを読んでも分からないリポジトリ固有の事情」** を伝えるためのドキュメントです。これを置くと scan 9 観点 + triage 3 ロール全ての system prompt 末尾に注入され、誤検出 / 見逃しの両方を大きく減らせます。
+`SECURITY-CONTEXT.md` は、`llm-security-scan` の LLM スキャナに **「diff だけを読んでも分からないリポジトリ固有の事情」** を伝えるためのドキュメントです。これを置くと scan 10 観点 + triage 3 ロール全ての system prompt 末尾に注入され、誤検出 / 見逃しの両方を大きく減らせます。
 
 このガイドは「何を書くべきか」と「AI に下書きを作らせるためのコピペ用 prompt」を提供します。
 
@@ -177,7 +177,7 @@ caller workflow で参照:
 # .github/workflows/security-scan.yml
 jobs:
   scan:
-    uses: Zuck3-r/llm-security-scan/.github/workflows/scan.yml@v0.6.1
+    uses: Zuck3-r/llm-security-scan/.github/workflows/scan.yml@v0.7.0
     with:
       overrides_path: .github/security-scan-overrides
       context_path:   .github/security-scan-overrides/SECURITY-CONTEXT.md

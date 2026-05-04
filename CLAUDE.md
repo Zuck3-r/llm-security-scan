@@ -52,7 +52,7 @@ llm-security-scan/
 │   ├── validator.py               4 検証ゲート: schema / file-existence / dedup / safe_pattern
 │   ├── reporter.py                Markdown レポート生成 (sticky PR comment)
 │   └── providers.py               LLM プロバイダー切替 (OpenAI > Vertex AI > Gemini)
-├── perspectives/                  汎用デフォルト観点 (9 つ)
+├── perspectives/                  汎用デフォルト観点 (10)
 │   ├── xss.yml
 │   ├── injection.yml
 │   ├── authn.yml                  認証 (未認証アクセス・JWT 検証)
@@ -61,7 +61,8 @@ llm-security-scan/
 │   ├── authz_horizontal.yml       横の権限不備 / IDOR
 │   ├── secrets.yml
 │   ├── ssrf_path.yml
-│   └── business_logic.yml         ビジネスロジック不備 (検証欠落・状態遷移・冪等性)
+│   ├── business_logic.yml         ビジネスロジック不備 (検証欠落・状態遷移・冪等性)
+│   └── file_inclusion.yml         ファイルインクルージョン / アップロード不備
 ├── triage_prompts.yml             Attacker / Defender / Judge のロール別プロンプト
 ├── .github/workflows/
 │   └── scan.yml                   ★ reusable workflow (on: workflow_call)
@@ -124,7 +125,7 @@ on:
     branches: [main]
 jobs:
   scan:
-    uses: Zuck3-r/llm-security-scan/.github/workflows/scan.yml@v1
+    uses: Zuck3-r/llm-security-scan/.github/workflows/scan.yml@v0.7.0
     with:
       overrides_path: .github/security-scan-overrides   # 任意
       perspectives_disabled: ""                          # 任意 (e.g. "secrets,xss")
@@ -157,10 +158,12 @@ jobs:
 |-------|------|---------|------|
 | overrides_path | string | "" | プロジェクト固有の perspectives / prompts |
 | perspectives_disabled | string | "" | 無効にする perspective id (comma 区切り) |
-| scan_targets | string | "*.py *.ts *.tsx *.js *.jsx" | diff 対象のファイルパターン |
+| scan_exclude_extensions | string | (README 参照) | 除外する拡張子 (CSV) |
+| scan_extra_excludes | string | "" | 追加の git pathspec |
 | max_low_per_perspective | number | 3 | Low severity の triage 上限 |
 | triage_enabled | boolean | true | triage を有効にするか |
-| debate_rounds | number | 1 | Multi-round debate のラウンド数 (将来用) |
+| debate_rounds | number | 1 | Multi-round debate のラウンド数 |
+| context_path | string | "" | SECURITY-CONTEXT.md のパス |
 
 
 ## 6. LLM プロバイダー
@@ -169,7 +172,7 @@ jobs:
 
 | provider | 認証 | モデルデフォルト |
 |----------|------|------------------|
-| OpenAI | `OPENAI_API_KEY` | gpt-4o-mini |
+| OpenAI | `OPENAI_API_KEY` | gpt-5.5 |
 | Vertex AI | `GCP_SA_KEY` (SA JSON) + ADC | gemini-2.0-flash |
 | Gemini | `GEMINI_API_KEY` | gemini-2.0-flash |
 
@@ -231,91 +234,30 @@ judge:
 
 ## 9. 実装フェーズ
 
-### Phase 1–3（完了。Beacon から移植済み）
+### 完了済みフェーズ
 
-- Phase 1: ハーネス骨格 + xss / injection 観点 + 4 検証ゲート
-- Phase 2: 弁証法的トリアージ + PoC 構築 + YAML 化 + 英語 system 化 + file filter 厳格化
-- Phase 3: auth / secrets / ssrf_path 観点追加 + Judge confidence (0.0–1.0) + 低確信 dismissed の救済
-- Phase 4 (post v0.5): auth.yml を authn / csrf / authz_vertical / authz_horizontal の 4 観点に分割（責務明確化・PR レポートのカテゴリ独立化・領域固有 safe_pattern の精度向上）
+| フェーズ | 内容 | タグ |
+|----------|------|------|
+| Phase 1 | ハーネス骨格 + xss / injection 観点 + 4 検証ゲート | — |
+| Phase 2 | 弁証法的トリアージ + PoC 構築 + YAML 化 + 英語 system 化 | — |
+| Phase 3 | auth / secrets / ssrf_path 観点追加 + Judge confidence | — |
+| Phase 4 | auth → authn / csrf / authz_vertical / authz_horizontal 分割 | v0.6.0 |
+| Step 0 | Beacon 移植 + 汎用化 + overrides_path マージ | v0.1.0 |
+| Step 1 | Replay モード (`replay.py` + workflow_dispatch) | — |
+| Step 2 | Eval harness (`eval.py` + retry-once + reusable workflow) | — |
+| Step 4 | Multi-round debate (inconclusive のみ追加ラウンド) | — |
+| — | business_logic 観点追加 (検証欠落・状態遷移・冪等性・TOCTOU) | v0.7.0 |
+| — | file_inclusion 観点追加 (LFI/RFI・アップロード不備・Stored XSS) | — |
 
-### Step 0: Beacon からの移植 + 汎用化（このリポジトリの初期作業）
+### 未着手: Cross-PR triage cache（feat/cache）
 
-- `.github/security-scan/*` をルートに昇格して `src/` 構造に再編
-- Beacon 固有の安全パターン（`_dev_bypass_enabled` 等）を除去
-- scan.yml を `on: workflow_call` 化
-- overrides_path マージロジック実装
-- タグ v0.1.0
-
-### Step 1: Replay モード（feat/replay）
-
-**なぜ最優先**: eval ケースを手書きするより、過去 PR を回して目視で選ぶ方が速い。
-
-```bash
-python replay.py --pr 42
-python replay.py --pr-range 1..100
-```
-
-出力: `replays/PR-<n>.json`
-```json
-{
-  "pr_number": 42,
-  "title": "...",
-  "merged_at": "...",
-  "diff_stats": { "files": 5, "additions": 230, "deletions": 12 },
-  "findings": [],
-  "triage": { "confirmed": 1, "dismissed": 2, "inconclusive": 0 },
-  "tokens": { "scan_in": 1234, "scan_out": 567, "triage_in": 0, "triage_out": 0 }
-}
-```
-
-workflow_dispatch ジョブも併設（artifact として replays/*.json をアップロード）。
-
-### Step 2: Eval harness（feat/evals）
-
-```
-evals/
-├── cases/<id>-<title>.diff
-└── expected.yml
-```
-
-```yaml
-# expected.yml
-- case: 001-xss-real
-  expect_verdict: confirmed
-  expect_perspective: xss
-  expect_min_confidence: 0.7
-- case: 002-xss-fp
-  expect_verdict: dismissed
-  expect_perspective: xss
-```
-
-```bash
-python eval.py  # → 全 case を engine.py に流して expected.yml と突合、不一致で exit 1
-```
-
-CI: PR で eval が落ちたらマージ不可。
-
-ワークフロー: replays/ から「答案確定」と判断したものを cases/ にコピーして expected.yml にエントリ追加。
-
-### Step 3: Cross-PR triage cache（feat/cache）
-
-**eval が安定してから実装**（プロンプトが揺れている期間にキャッシュを焼くと古い verdict で汚染される）。
+**観点追加が落ち着いてから実装**（プロンプトが揺れている期間にキャッシュを焼くと古い verdict で汚染される）。
 
 - キー: `sha256(perspective_id + file + line + title + diff_hunk_around)`
 - 値: `{ verdict, confidence, attacker_arg, defender_arg, poc, ts, prompt_version }`
 - 保存先: GitHub Actions cache (`actions/cache@v4`) または Artifacts
 - 無効化: `triage_prompts.yml` の hash か `prompt_version` 文字列が変わったら全 miss
 - TTL: 30–90 日
-
-### Step 4: Multi-round debate（feat/multi-round-debate）
-
-**実装前にユーザーに「inconclusive のみ二段構え」設計で OK か確認すること。**
-
-- 現状 1 ラウンド: Attacker → Defender → Judge
-- Multi-round: Attacker → Defender → Attacker(反論 v2) → Defender(再反証) → Judge
-- inconclusive 判定のみに追加ラウンドを当てる（confirmed / dismissed には適用しない、コスト最適化）
-- `--debate-rounds 2`（デフォルト 1 = 現状互換）
-- triage_prompts.yml に `attacker_rebut` / `defender_rebut` ロールを追加
 
 
 ## 10. やらないこと

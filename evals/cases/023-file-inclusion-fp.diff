@@ -1,0 +1,39 @@
+diff --git a/app/services/csv_upload_service.py b/app/services/csv_upload_service.py
+index e69de29..a3b9c1d 100644
+--- a/app/services/csv_upload_service.py
++++ b/app/services/csv_upload_service.py
+@@ -0,0 +1,32 @@
++import boto3
++from flask import Blueprint, request, jsonify
++from auth import login_required
++
++upload_bp = Blueprint("upload", __name__)
++s3 = boto3.client("s3")
++BUCKET = "assets-user-imports"
++ALLOWED_EXTENSIONS = {".csv", ".tsv"}
++
++
++@upload_bp.route("/api/imports/presign", methods=["POST"])
++@login_required
++def generate_presigned():
++    """CSVインポート用の署名付きアップロードURLを発行する。"""
++    filename = request.json["filename"]
++
++    # 拡張子ホワイトリストで制限
++    ext = os.path.splitext(filename)[1].lower()
++    if ext not in ALLOWED_EXTENSIONS:
++        return jsonify({"error": "Unsupported file type"}), 400
++
++    key = f"imports/{request.user.org_id}/{filename}"
++
++    # Content-Type を text/csv に固定し、任意型のアップロードを防止
++    url = s3.generate_presigned_url(
++        "put_object",
++        Params={"Bucket": BUCKET, "Key": key, "ContentType": "text/csv"},
++        ExpiresIn=600,
++    )
++
++    return jsonify({
++        "upload_url": url,
++        "file_url": f"https://cdn-imports.example.com/{key}",
++    })

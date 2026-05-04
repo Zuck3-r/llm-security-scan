@@ -1,0 +1,30 @@
+diff --git a/app/services/csv_upload_service.py b/app/services/csv_upload_service.py
+index e69de29..f4a7b2c 100644
+--- a/app/services/csv_upload_service.py
++++ b/app/services/csv_upload_service.py
+@@ -0,0 +1,25 @@
++import boto3
++from flask import Blueprint, request, jsonify
++from auth import login_required
++
++upload_bp = Blueprint("upload", __name__)
++s3 = boto3.client("s3")
++BUCKET = "assets-user-imports"
++
++
++@upload_bp.route("/api/imports/presign", methods=["POST"])
++@login_required
++def generate_presigned():
++    """CSVインポート用の署名付きアップロードURLを発行する。"""
++    filename = request.json["filename"]
++    key = f"imports/{request.user.org_id}/{filename}"
++
++    # Content-Type の制約なし — 任意の形式 (HTML, SVG 等) をアップロード可能。
++    url = s3.generate_presigned_url(
++        "put_object",
++        Params={"Bucket": BUCKET, "Key": key},
++        ExpiresIn=600,
++    )
++
++    # 署名付き URL をそのまま返却。クライアントはこの URL に PUT する。
++    return jsonify({"upload_url": url, "file_url": f"https://assets.example.com/{key}"})
