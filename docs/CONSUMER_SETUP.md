@@ -39,6 +39,11 @@ Settings → Variables → New repository variable で：
 - `GCP_LOCATION`: default `us-central1`（任意）
 - `LLM_MODEL`: default `gpt-5.5`（OpenAI 系のときのみ意味あり）
 
+組織/リポジトリの Variables で `GCP_PROJECT` 等の名前が他用途と衝突する場合は、代わりに
+`LLM_SECURITY_SCAN_GCP_PROJECT` / `LLM_SECURITY_SCAN_GCP_LOCATION` / `LLM_SECURITY_SCAN_MODEL`
+を設定してください。こちらが設定されていれば優先され、無ければ上記の従来名にフォールバックしま
+す（後方互換のため既存 caller の設定はそのまま動作）。
+
 ### Step 2: ワークフローを追加
 
 リポに `.github/workflows/security-scan.yml` を作成：
@@ -312,7 +317,7 @@ python replay.py --pr-range 1..50 --repo myorg/myrepo
 - Settings → Secrets で登録（fork の PR では secrets が渡らないことがある点に注意）
 
 ### Vertex AI で 404 エラー
-- `vars.GCP_PROJECT` が未設定で `CHANGE_ME` のまま呼んでいる → Settings → Variables で設定
+- `vars.LLM_SECURITY_SCAN_GCP_PROJECT` / `vars.GCP_PROJECT` のどちらも未設定で `CHANGE_ME` のまま呼んでいる → Settings → Variables で設定
 - SA に Vertex AI User ロールが付いていない → IAM で付与
 
 ### 偽陽性ばかり出る

@@ -203,10 +203,10 @@ jobs:
         env:
           LLM_PROVIDER:          ${{ steps.detect.outputs.provider }}
           OPENAI_API_KEY:        ${{ secrets.OPENAI_API_KEY }}
-          GOOGLE_CLOUD_PROJECT:  ${{ vars.GCP_PROJECT  || 'CHANGE_ME' }}
-          GOOGLE_CLOUD_LOCATION: ${{ vars.GCP_LOCATION || 'us-central1' }}
+          GOOGLE_CLOUD_PROJECT:  ${{ vars.LLM_SECURITY_SCAN_GCP_PROJECT  || vars.GCP_PROJECT  || 'CHANGE_ME' }}
+          GOOGLE_CLOUD_LOCATION: ${{ vars.LLM_SECURITY_SCAN_GCP_LOCATION || vars.GCP_LOCATION || 'us-central1' }}
           GEMINI_API_KEY:        ${{ secrets.GEMINI_API_KEY }}
-          LLM_MODEL:             ${{ vars.LLM_MODEL || 'gpt-4o-mini' }}
+          LLM_MODEL:             ${{ vars.LLM_SECURITY_SCAN_MODEL || vars.LLM_MODEL || 'gpt-4o-mini' }}
           CASES_DIR:             ${{ inputs.cases_dir }}
           EXPECTED:              ${{ inputs.expected }}
           NO_RETRY:              ${{ inputs.no_retry }}

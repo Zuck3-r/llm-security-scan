@@ -44,6 +44,8 @@ jobs:
 
 **Vertex AI を使う場合のみ**: Settings → Variables に `GCP_PROJECT` を追加して GCP プロジェクト ID を設定してください（未設定だと `CHANGE_ME` で API 呼び出しが失敗します）。`GCP_LOCATION` (default: `us-central1`) と `LLM_MODEL` (default: `gpt-5.5`) も同様に Variables で上書き可能です。
 
+組織/リポジトリの Variables で既に `GCP_PROJECT` 等の名前を他用途に使っていて衝突しそうな場合は、代わりに `LLM_SECURITY_SCAN_GCP_PROJECT` / `LLM_SECURITY_SCAN_GCP_LOCATION` / `LLM_SECURITY_SCAN_MODEL` を設定してください。設定されていればそちらが優先され、無ければ従来名 (`GCP_PROJECT` 等) にフォールバックします。
+
 ### 3. PR を作成
 
 以上。PR を作れば自動でスキャンが走り、結果が PR コメントに投稿される。

@@ -273,10 +273,13 @@ jobs:
         env:
           LLM_PROVIDER:          ${{ steps.detect.outputs.provider }}
           OPENAI_API_KEY:        ${{ secrets.OPENAI_API_KEY }}
-          GOOGLE_CLOUD_PROJECT:  ${{ vars.GCP_PROJECT  || 'CHANGE_ME' }}
-          GOOGLE_CLOUD_LOCATION: ${{ vars.GCP_LOCATION || 'us-central1' }}
+          # vars.LLM_SECURITY_SCAN_* が優先。未設定なら旧来の汎用名 (GCP_PROJECT 等) に
+          # フォールバックする — caller 側の変数名衝突を避けたい場合に新名へ移行できるが、
+          # 既存 caller (旧名のみ設定) は無変更で動き続ける。
+          GOOGLE_CLOUD_PROJECT:  ${{ vars.LLM_SECURITY_SCAN_GCP_PROJECT  || vars.GCP_PROJECT  || 'CHANGE_ME' }}
+          GOOGLE_CLOUD_LOCATION: ${{ vars.LLM_SECURITY_SCAN_GCP_LOCATION || vars.GCP_LOCATION || 'us-central1' }}
           GEMINI_API_KEY:        ${{ secrets.GEMINI_API_KEY }}
-          LLM_MODEL:             ${{ vars.LLM_MODEL || 'gpt-5.5' }}
+          LLM_MODEL:             ${{ vars.LLM_SECURITY_SCAN_MODEL || vars.LLM_MODEL || 'gpt-5.5' }}
           TRIAGE_ENABLED:        ${{ inputs.triage_enabled }}
           MAX_LOW:               ${{ inputs.max_low_per_perspective }}
           DEBATE_ROUNDS:         ${{ inputs.debate_rounds }}
