@@ -56,7 +56,7 @@ on:
 
 jobs:
   scan:
-    uses: Zuck3-r/llm-security-scan/.github/workflows/scan.yml@v0.7.0
+    uses: Zuck3-r/llm-security-scan/.github/workflows/scan.yml@v0.8.0
     secrets:
       OPENAI_API_KEY:  ${{ secrets.OPENAI_API_KEY }}
       GCP_SA_KEY:      ${{ secrets.GCP_SA_KEY }}
@@ -126,7 +126,7 @@ on:
 
 jobs:
   scan:
-    uses: Zuck3-r/llm-security-scan/.github/workflows/scan.yml@v0.7.0
+    uses: Zuck3-r/llm-security-scan/.github/workflows/scan.yml@v0.8.0
     with:
       context_path: .github/security-scan-overrides/SECURITY-CONTEXT.md
     secrets:
@@ -267,7 +267,7 @@ on:
 
 jobs:
   eval:
-    uses: Zuck3-r/llm-security-scan/.github/workflows/eval.yml@v0.7.0
+    uses: Zuck3-r/llm-security-scan/.github/workflows/eval.yml@v0.8.0
     with:
       cases_dir:    .github/security-scan-overrides/cases
       expected:     .github/security-scan-overrides/expected.yml

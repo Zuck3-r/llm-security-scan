@@ -125,7 +125,7 @@ on:
     branches: [main]
 jobs:
   scan:
-    uses: Zuck3-r/llm-security-scan/.github/workflows/scan.yml@v0.7.0
+    uses: Zuck3-r/llm-security-scan/.github/workflows/scan.yml@v0.8.0
     with:
       overrides_path: .github/security-scan-overrides   # 任意
       perspectives_disabled: ""                          # 任意 (e.g. "secrets,xss")
